@@ -1,0 +1,42 @@
+{
+  "slug": "parcs-de-marennes",
+  "name": "Les Parcs de Marennes",
+  "trade": "huîtres et coquillages",
+  "region": "Charente-Maritime et Nouvelle-Aquitaine",
+  "city": "Marennes-Hiers-Brouage",
+  "employees": 18,
+  "clients": 85,
+  "products": 53,
+  "suppliers": 8,
+  "orders": 24954,
+  "stockoutPct": 0.6,
+  "worstStockouts": [
+    "MER-COT:131",
+    "TOU-CUI:129",
+    "SJA-COQ:109",
+    "SOL-COT:75",
+    "BAR-LIG:69"
+  ],
+  "seedMB": 79.8,
+  "generationSeconds": 4.9,
+  "counts": {
+    "products": 53,
+    "clients": 85,
+    "clientPrices": 93,
+    "suppliers": 8,
+    "supplierPrices": 56,
+    "lots": 23218,
+    "stockMovements": 156154,
+    "orders": 24954,
+    "purchaseOrders": 4706,
+    "invoices": 13596,
+    "payments": 9766,
+    "routes": 5,
+    "routeRuns": 3406,
+    "clientEvents": 3235,
+    "supplierEvents": 822,
+    "tags": 31,
+    "priceRules": 8,
+    "contextEntries": 1005
+  }
+}
