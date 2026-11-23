@@ -21,6 +21,8 @@ class StartMessage(WireModel):
     type: Literal["start"] = "start"
     session_id: str | None = None
     actor_name: str | None = None
+    # Outbound clearance call (ccl_…): a fresh conversation where the AGENT speaks first (call_started, then its turn).
+    campaign_call_id: str | None = None
 
 
 class AudioStartMessage(WireModel):
@@ -49,8 +51,14 @@ class ResetMessage(WireModel):
     type: Literal["reset"] = "reset"
 
 
+class HangupMessage(WireModel):
+    """Ends the outbound call in progress: the agent stops, the outcome is recorded (if the agent did not), call_ended."""
+
+    type: Literal["hangup"] = "hangup"
+
+
 VoiceClientMessage = Annotated[
-    Union[StartMessage, AudioStartMessage, AudioEndMessage, TextMessage, ResetMessage],
+    Union[StartMessage, AudioStartMessage, AudioEndMessage, TextMessage, ResetMessage, HangupMessage],
     Field(discriminator="type"),
 ]
 
@@ -114,6 +122,24 @@ class VoiceErrorMessage(WireModel):
     message: str
 
 
+class CallStartedMessage(WireModel):
+    """Outbound call opened (after `ready`): who is called and what is offered. The agent's first turn follows."""
+
+    type: Literal["call_started"] = "call_started"
+    call_id: str
+    client_name: str
+    offers: list[str]  # "Moule de bouchot de Charron : 120 kg à 2,98 €"
+
+
+class CallEndedMessage(WireModel):
+    """Outbound call closed after `hangup`. outcome = what was recorded at hang-up; absent when the agent had
+    already recorded it (record_call_outcome)."""
+
+    type: Literal["call_ended"] = "call_ended"
+    call_id: str
+    outcome: str | None = None
+
+
 VoiceServerMessage = Annotated[
     Union[
         ReadyMessage,
@@ -124,6 +150,8 @@ VoiceServerMessage = Annotated[
         AgentAudioEndMessage,
         AgentDoneMessage,
         VoiceErrorMessage,
+        CallStartedMessage,
+        CallEndedMessage,
     ],
     Field(discriminator="type"),
 ]

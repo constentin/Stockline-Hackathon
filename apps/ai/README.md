@@ -162,6 +162,21 @@ audio_end                                ──►   (or: text {text} to type in
 reset                                    ──►   history cleared, ready again
 ```
 
+**Outbound clearance call** (the agent calls a client, campaign in `/api/campaigns`, see `services/outbound.py`):
+
+```
+start {sessionId?, actorName?, campaignCallId: "ccl_000001"} ──►   (fresh history; call brief loaded, call in_progress)
+                                         ◄──   ready …, call_started {callId, clientName, offers}
+                                         ◄──   agent_text … agent_audio … agent_done   (the AGENT speaks first)
+… push-to-talk turns as above (mode "outbound", tools: tools.outbound_tools()) …
+hangup                                   ──►   agent stopped; outcome recorded if the agent did not (Jev or rules)
+                                         ◄──   call_ended {callId, outcome?}
+```
+
+- The brief goes at the END of the system prompt (`run_agent(system_extra=…)`) and is not refreshed during the call:
+  the prompt cache keeps serving everything before it. Dates are given in words (`deliveryOn`, `keepsUntil`).
+- Text test of one call: `uv run python -m app.cli --call ccl_000001`. Scenario bench: `uv run python -m app.eval_outbound`.
+
 - `WS /voice/command[?speak=1]`: the same live audio for ONE voice command (the ⌥Space HUD): `audio_start`, frames,
   `audio_end` (or one `text`) → `transcript {final: false}` while speaking, then the `POST /command` events as JSON
   messages; closed after `done` / `error`. Closing it earlier cancels the command.

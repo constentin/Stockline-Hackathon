@@ -15,7 +15,9 @@ from app.core.listing import LIMIT_MAX, ListDep, Page, legacy_limit
 from app.core.utils import int_param
 from app.schemas.domain import ActivityEvent, Category, Meta
 from app.services.categories import list_categories
-from app.schemas.views import Dashboard, Health, Ok, SearchResult
+from app.schemas.views import Dashboard, DemoLot, Health, Ok, SearchResult
+from app.dependencies import CtxDep
+from app.services import demo
 from app.services.dashboard import dashboard
 from app.services.search import search
 
@@ -109,3 +111,9 @@ async def admin_reset():
     source = reset_from_pack()
     log.info("reset from %s: %s", source, counts())
     return {"ok": True}
+
+
+@router.post("/admin/demo/short-dated", response_model=list[DemoLot], status_code=201)
+async def demo_short_dated(ctx: CtxDep, count: int = Query(6, ge=1, le=8, description="How many products get a surplus lot")):
+    """Demo scenario: surplus lots expiring in 1–3 days on the best-selling perishables (once a day; make reset undoes it)."""
+    return demo.add_short_dated_surplus(ctx, count)

@@ -24,6 +24,7 @@ from app.core.utils import js_str
 from app.dependencies import ERROR_RESPONSES
 from app.routers import (
     billing,
+    campaigns,
     client_events,
     clients,
     context,
@@ -101,6 +102,8 @@ for router in [
     logistics.routes,
     logistics.route_runs,
     context.router,
+    campaigns.router,
+    campaigns.calls,
 ]:
     app.include_router(router, responses=ERROR_RESPONSES)
 

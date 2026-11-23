@@ -21,6 +21,7 @@ import type { Receivables } from "@kit/shared";
 import type { Category } from "@kit/shared";
 import type { ContextEntry, ContextEntryInput, ContextEntrySummary, ContextForEntity, ContextScope } from "@kit/shared";
 import type { ListParams, Page } from "@kit/shared";
+import type { CampaignCallStatus, CampaignCallView, CampaignDetail, CampaignImportInput, CampaignStatus, CampaignSummary, ClearanceProposal, NextCall } from "@kit/shared";
 import { toast } from "@/ui/toast";
 
 export const API_BASE = "/api";
@@ -263,6 +264,19 @@ export const api = {
   },
 
   // ── Context table (what the agents know) ──
+  campaigns: {
+    list: () => get<CampaignSummary[]>("/campaigns"),
+    /** The clearance model: expected losses → offers, clients, discounts (nothing is written). */
+    proposal: () => get<ClearanceProposal>("/campaigns/proposal"),
+    get: (id: Id) => get<CampaignDetail>(`/campaigns/${id}`),
+    import: (body: CampaignImportInput) => post<CampaignDetail>("/campaigns/import", body),
+    update: (id: Id, body: { name?: string; status?: CampaignStatus }) => patch<CampaignDetail>(`/campaigns/${id}`, body),
+    nextCall: (id: Id) => get<NextCall>(`/campaigns/${id}/next-call`),
+    call: (id: Id) => get<CampaignCallView>(`/campaign-calls/${id}`),
+    updateCall: (id: Id, body: { status?: CampaignCallStatus; summary?: string; callbackAt?: string }) =>
+      patch<CampaignCallView>(`/campaign-calls/${id}`, body),
+  },
+
   context: {
     list: (p?: ContextListParams) => get<ContextEntrySummary[]>("/context", p as Query),
     page: (p?: ContextListParams) => getPage<ContextEntrySummary>("/context", p),

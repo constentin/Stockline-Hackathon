@@ -2,6 +2,7 @@
  * Voix — two modes, switched in the header (?mode=command):
  *  - Appel (conversation): two-track push-to-talk lab on WS /ai/voice (below).
  *  - Commande (un tour): single-turn voice commands on POST /ai/command, see ./command.tsx.
+ *  - ?call=ccl_… (Appel mode): an outbound clearance call, see ./outbound.tsx (the agent speaks first).
  *
  * Appel: two-track push-to-talk lab on WS /ai/voice.
  * Hold Space (or the big button) to speak as the caller; the agent answers with streamed text, tool calls and audio.
@@ -16,6 +17,7 @@ import { useVoiceSession, type Activity, type Conn } from "@/features/assistant/
 import { CommandMode } from "./command";
 import { LiveActivity } from "./live-activity";
 import { MetricsBar } from "./metrics";
+import { OutboundBar } from "./outbound";
 import { LevelBars, Timeline } from "./timeline";
 
 const isTypingTarget = (t: EventTarget | null) => {
@@ -110,6 +112,7 @@ function CallMode({ modeSwitch }: { modeSwitch: ReactNode }) {
       />
       <div className="flex min-h-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col">
+          <OutboundBar v={v} />
           <MetricsBar turns={v.turns} />
           <Timeline turns={v.turns} activity={v.activity} level={v.level} />
 

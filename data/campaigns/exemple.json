@@ -1,0 +1,24 @@
+{
+  "campaignId": "cmp_demo",
+  "name": "Déstockage du mar. 24 nov.",
+  "offers": [
+    { "offerId": "off_1", "productId": "prd_0013", "lotId": "lot_023163", "qty": 120, "discountPct": 20, "maxDiscountPct": 30 },
+    { "offerId": "off_2", "productId": "prd_0027", "lotId": "lot_023172", "qty": 60, "discountPct": 25, "maxDiscountPct": 35 },
+    { "offerId": "off_3", "productId": "prd_0022", "lotId": "lot_023169", "qty": 50, "discountPct": 20, "maxDiscountPct": 30 },
+    { "offerId": "off_4", "productId": "prd_0027", "lotId": "lot_023144", "qty": 8, "discountPct": 40, "maxDiscountPct": 50 }
+  ],
+  "targets": [
+    { "clientId": "cli_0065", "offerIds": ["off_1", "off_2", "off_3"], "score": 0.91,
+      "reason": "commande moules, crevettes et bulots presque tous les jours" },
+    { "clientId": "cli_0074", "offerIds": ["off_1", "off_4"], "score": 0.86,
+      "reason": "gros acheteur de moules de Charron (75 kg en moyenne)" },
+    { "clientId": "cli_0067", "offerIds": ["off_3"], "score": 0.8,
+      "reason": "prend des bulots cuits chaque semaine" },
+    { "clientId": "cli_0028", "offerIds": ["off_2", "off_3"], "score": 0.78,
+      "reason": "brasserie, crevettes roses et bulots à la carte" },
+    { "clientId": "cli_0041", "offerIds": ["off_4"], "score": 0.75,
+      "reason": "achète des crevettes roses, mais livré mardi et jeudi" },
+    { "clientId": "cli_0008", "offerIds": ["off_2"], "score": 0.7,
+      "reason": "client bloqué : doit être écarté" }
+  ]
+}

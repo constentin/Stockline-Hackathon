@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from app.clients import get_llm_client, get_stt_client, get_tts_client
 from app.config import settings
 from app.schemas import HealthResponse, LLMInfo, ProviderInfo, ToolInfo
-from app.tools import all_tools
+from app.tools import TOOLS
 
 router = APIRouter(tags=["service"])
 
@@ -24,5 +24,5 @@ async def health() -> HealthResponse:
 
 @router.get("/tools", response_model=list[ToolInfo])
 async def tools() -> list[ToolInfo]:
-    """The tools the agent exposes to the model (name, description, JSON schema)."""
-    return [t.info for t in all_tools()]
+    """Every registered tool (name, description, JSON schema). Inbound modes get all_tools(), outbound calls outbound_tools()."""
+    return [t.info for t in TOOLS.values()]

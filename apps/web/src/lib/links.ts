@@ -13,6 +13,7 @@ export function entityPath(entity: ActivityEvent["entity"], id: Id): string | un
     case "payment": return `/payments`;
     case "route_run": return `/routes`;
     case "context": return `/context?e=${id}`;
+    case "campaign": return `/campaigns?c=${id}`;
     default: return undefined;
   }
 }
@@ -20,4 +21,5 @@ export function entityPath(entity: ActivityEvent["entity"], id: Id): string | un
 export const ENTITY_LABEL: Record<ActivityEvent["entity"], string> = {
   client: "Client", supplier: "Fournisseur", product: "Produit", stock: "Stock", order: "Commande",
   purchase_order: "Achat", invoice: "Facture", payment: "Paiement", route_run: "Tournée", context: "Contexte",
+  campaign: "Campagne",
 };

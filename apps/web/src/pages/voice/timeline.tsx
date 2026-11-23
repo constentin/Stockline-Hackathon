@@ -1,6 +1,6 @@
 /** Two-track timeline: Appelant (left lane) and Agent (right lane); agent tool calls inline, violet. */
 import { useLayoutEffect, useRef } from "react";
-import { AudioLines, CircleAlert, Keyboard, Phone } from "lucide-react";
+import { AudioLines, CircleAlert, Keyboard, Phone, PhoneOutgoing } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Dot, EmptyState, Kbd, SECTION_LABEL, Spinner } from "@/ui";
 import { LiveTranscript } from "@/features/assistant/LiveTranscript";
@@ -59,7 +59,15 @@ function TurnRows({ t, last, activity, level }: { t: VoiceTurn; last: boolean; a
   const thinking = !a.done && !agentStarted && c.status === "final";
   return (
     <li className="flex flex-col gap-2 animate-fade-in">
-      {/* Caller */}
+      {/* Caller (an outbound call opens on a switchboard cue instead: the agent speaks first) */}
+      {c.cue ? (
+        <div className={GRID}>
+          <time className="num pt-0.5 font-mono text-[10.5px] text-muted-foreground">{clock(c.at)}</time>
+          <span className="col-span-2 flex items-center gap-1.5 text-[12px] text-muted-foreground">
+            <PhoneOutgoing size={12} strokeWidth={1.75} className="text-violet" />{c.text} · le client décroche
+          </span>
+        </div>
+      ) : (
       <div className={GRID}>
         <time className="num pt-1.5 font-mono text-[10.5px] text-muted-foreground">{clock(c.at)}</time>
         <div className="flex min-w-0 justify-start">
@@ -85,6 +93,7 @@ function TurnRows({ t, last, activity, level }: { t: VoiceTurn; last: boolean; a
         </div>
         <span />
       </div>
+      )}
 
       {/* Agent */}
       {agentStarted || thinking || a.done ? (

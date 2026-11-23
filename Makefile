@@ -29,6 +29,9 @@ ps: ## container status
 reset: ## reload the ERP from the data pack (wipes your changes; works for Docker and local)
 	@curl -fsS -X POST http://localhost:$(API_PORT)/api/admin/reset && echo
 
+demo-stock: ## demo: surplus lots expiring in 1-3 days on the best sellers (once a day; after make reset)
+	@curl -fsS -X POST http://localhost:$(API_PORT)/api/admin/demo/short-dated && echo
+
 rebuild: ## after adding a dependency (pyproject.toml or package.json changed)
 	$(COMPOSE) build --no-cache && $(COMPOSE) up -d
 
@@ -61,4 +64,4 @@ test: ## AI service tests (offline: adapters, tools, mock); needs uv
 check: ## frontend typecheck + design guards (needs Node + pnpm)
 	pnpm --filter @kit/web typecheck && ./scripts/check-no-native-controls.sh
 
-.PHONY: help setup up down restart logs ps reset rebuild clean offline local dev chat types test check
+.PHONY: help setup up down restart logs ps reset demo-stock rebuild clean offline local dev chat types test check

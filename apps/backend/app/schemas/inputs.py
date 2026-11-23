@@ -13,6 +13,8 @@ from pydantic import AfterValidator, Field, StringConstraints
 
 from app.schemas.base import Input
 from app.schemas.domain import (
+    CampaignCallStatus,
+    CampaignStatus,
     ClientEventType,
     ClientStatus,
     ClientType,
@@ -373,3 +375,52 @@ class ContextEntryPatch(Input):
     title: Title | None = None
     body: Body | None = None
     tags: list[str] | None = None
+
+
+# ───────── Clearance campaigns ─────────
+
+Pct = Annotated[float, Field(ge=0, lt=100)]
+
+
+class CampaignOfferInput(Input):
+    offer_id: NonEmpty  # "off_1"
+    product_id: NonEmpty
+    lot_id: NonEmpty | None = None
+    qty: Positive
+    expires_at: IsoDateStr | None = None  # defaults to the lot's expiry
+    discount_pct: Pct
+    max_discount_pct: Pct
+
+
+class CampaignTargetInput(Input):
+    client_id: NonEmpty
+    offer_ids: list[NonEmpty] = Field(min_length=1)
+    score: float | None = None
+    reason: str | None = None
+
+
+class CampaignImportInput(Input):
+    """The clearance model's output: short-dated offers + the clients to call about them."""
+
+    campaign_id: NonEmpty | None = None  # "cmp_2026-11-24"; generated when absent
+    name: NonEmpty | None = None
+    offers: list[CampaignOfferInput] = Field(min_length=1)
+    targets: list[CampaignTargetInput] = Field(min_length=1)
+    close_others: bool | None = None  # close the campaigns still active (they could sell the same stock twice)
+
+
+class CampaignAcceptInput(Input):
+    offer_id: NonEmpty
+    qty: Positive
+    discount_pct: Pct | None = None  # defaults to the offer's opening discount
+
+
+class CampaignCallPatch(Input):
+    status: CampaignCallStatus | None = None
+    summary: NonEmpty | None = None
+    callback_at: IsoDateTimeStr | None = None  # with status "callback"
+
+
+class CampaignPatch(Input):
+    name: NonEmpty | None = None
+    status: CampaignStatus | None = None  # "closed": no more calls, no more sales

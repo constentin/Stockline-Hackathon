@@ -6,7 +6,7 @@
  *   <Badge tone="violet">IA</Badge>
  */
 import type { ReactNode } from "react";
-import type { Client, InvoiceStatus, OrderStatus, PurchaseOrderStatus, RouteRun, StopStatus } from "@kit/shared";
+import type { CampaignCallStatus, Client, InvoiceStatus, OrderStatus, PurchaseOrderStatus, RouteRun, StopStatus } from "@kit/shared";
 import { cn } from "@/lib/cn";
 
 export type Tone = "muted" | "info" | "violet" | "success" | "warning" | "destructive" | "foreground";
@@ -80,6 +80,17 @@ export const STOP_STATUS: StatusMap<StopStatus> = {
   failed: { label: "Échec", tone: "destructive" },
 };
 
+export const CAMPAIGN_CALL_STATUS: StatusMap<CampaignCallStatus> = {
+  pending: { label: "À appeler", tone: "muted" },
+  in_progress: { label: "En cours", tone: "violet" },
+  accepted: { label: "Accepté", tone: "success" },
+  callback: { label: "À rappeler", tone: "warning" },
+  declined: { label: "Refusé", tone: "foreground" },
+  no_answer: { label: "Sans réponse", tone: "foreground" },
+  do_not_call: { label: "Ne plus appeler", tone: "destructive" },
+  skipped: { label: "Écarté", tone: "muted" },
+};
+
 export const STATUS = {
   order: ORDER_STATUS,
   invoice: INVOICE_STATUS,
@@ -87,6 +98,7 @@ export const STATUS = {
   client: CLIENT_STATUS,
   routeRun: ROUTE_RUN_STATUS,
   stop: STOP_STATUS,
+  campaignCall: CAMPAIGN_CALL_STATUS,
 } as const;
 export type StatusKind = keyof typeof STATUS;
 

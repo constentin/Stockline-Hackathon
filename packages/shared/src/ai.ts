@@ -41,7 +41,7 @@ export interface ToolInfo {
 
 export interface ChatRequest {
   messages: ChatMessage[]; // full conversation so far (no system message; the harness adds it)
-  mode?: "chat" | "voice" | "command"; // voice → short spoken-style answers; command → single-turn, act-first, one line
+  mode?: "chat" | "voice" | "command" | "outbound"; // voice → short spoken-style answers; command → single-turn, act-first, one line; outbound → clearance call (needs a call brief: WS /voice)
   actorName?: string;
 }
 
@@ -55,11 +55,13 @@ export type ChatStreamEvent =
 // ── Voice (push-to-talk, two tracks: the human "caller" and the agent) ──
 
 export type VoiceClientMessage =
-  | { type: "start"; sessionId?: string; actorName?: string } // opens a conversation
+  // opens a conversation; campaignCallId (ccl_…) = an outbound clearance call: fresh history, the AGENT speaks first
+  | { type: "start"; sessionId?: string; actorName?: string; campaignCallId?: string }
   | { type: "audio_start"; mime: string; hint?: string } // caller pressed space (hint: optional STT vocabulary; mock STT returns it)
   | { type: "audio_end" } // caller released space; binary frames sent in between (every 100–250 ms) are the utterance, streamed to the STT as they arrive
   | { type: "text"; text: string } // typed instead of spoken (debug)
-  | { type: "reset" };
+  | { type: "reset" }
+  | { type: "hangup" }; // ends the outbound call: outcome recorded if the agent did not, then call_ended
 
 export interface TurnTimings {
   sttMs?: number;
@@ -79,7 +81,11 @@ export type VoiceServerMessage =
   | { type: "agent_audio_start"; mime: string } // binary frames follow
   | { type: "agent_audio_end" }
   | { type: "agent_done"; text: string; timings: TurnTimings }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  // outbound call opened (after ready): the agent's first turn follows. offers = "Moule … : 120 kg à 2,98 € (−20 %)"
+  | { type: "call_started"; callId: string; clientName: string; offers: string[] }
+  // after hangup; outcome = recorded at hang-up, absent when the agent had already recorded it
+  | { type: "call_ended"; callId: string; outcome?: string };
 
 /**
  * Mime returned by the AI service's mock TTS (no key configured): the bytes are a short silent WAV.
