@@ -326,7 +326,8 @@ class RouteRun(RouteRunBase):
 
 Actor = Literal["user", "ai_chat", "voice_agent", "system"]
 ActivityEntity = Literal[
-    "client", "supplier", "product", "stock", "order", "purchase_order", "invoice", "payment", "route_run", "context"
+    "client", "supplier", "product", "stock", "order", "purchase_order", "invoice", "payment", "route_run", "context",
+    "campaign",
 ]
 
 
@@ -543,3 +544,65 @@ class Meta(Schema):
     trade: str | None = None  # "fruits et légumes", from DATA_DIR/stats.json when present
     region: str | None = None  # "Lyon et Rhône"
     categories: list[Category] | None = None  # product categories of the pack, with French labels
+
+
+# ───────────────────────── Clearance campaigns (outbound calls) ─────────────────────────
+# A campaign = short-dated lots to clear (offers) + the clients to call about them (one call per client).
+# Produced by an external model (JSON imported through POST /api/campaigns/import), worked by the voice agent.
+
+CampaignStatus = Literal["active", "closed"]
+CampaignCallStatus = Literal["pending", "skipped", "in_progress", "accepted", "declined", "callback", "no_answer", "do_not_call"]
+
+
+class CampaignOffer(Schema):
+    """One short-dated lot (or part of it) offered at a discount."""
+
+    id: Id  # "off_1" (given by the model)
+    product_id: Id
+    lot_id: Id | None = None
+    qty: float  # quantity to clear, in the product's unit
+    expires_at: IsoDate
+    discount_pct: float  # opening discount on the client's usual price
+    max_discount_pct: float  # never go beyond (enforced by the backend)
+
+
+class Campaign(Schema):
+    id: Id  # "cmp_2026-11-24" or "cmp_000001"
+    name: str
+    status: CampaignStatus
+    offers: list[CampaignOffer]
+    created_at: IsoDateTime
+    created_by: str
+
+
+class CampaignCallLine(Schema):
+    """What the client accepted during the call (the order line carries the same price)."""
+
+    offer_id: Id
+    product_id: Id
+    qty: float
+    discount_pct: float
+    unit_price: float  # € HT / unit
+    line_id: Id | None = None  # the order line (a new "yes" on the same offer updates it)
+
+
+class CampaignCall(Schema):
+    """One outbound call: a client + the offers to propose, and how it went."""
+
+    id: Id  # "ccl_000001"
+    campaign_id: Id
+    client_id: Id
+    offer_ids: list[Id]
+    score: float  # from the model, higher = call first
+    reason: str | None = None  # why this client (from the model)
+    rank: int  # call order within the campaign (1 = first)
+    status: CampaignCallStatus
+    skip_reason: str | None = None
+    delivery_date: IsoDate  # client's next delivery day at import time
+    order_id: Id | None = None  # draft / confirmed order created during the call
+    accepted: list[CampaignCallLine] | None = None
+    summary: str | None = None  # one line on how the call went
+    callback_at: IsoDateTime | None = None
+    attempts: int
+    started_at: IsoDateTime | None = None
+    ended_at: IsoDateTime | None = None

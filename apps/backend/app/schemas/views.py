@@ -11,6 +11,10 @@ from pydantic import Field
 
 from app.schemas.base import Schema
 from app.schemas.domain import (
+    Campaign,
+    CampaignCallLine,
+    CampaignCall,
+    CampaignOffer,
     Client,
     ClientEvent,
     ClientStatus,
@@ -455,3 +459,184 @@ class ContextForEntity(Schema):
     # Related: product → its category; supplier → the categories it sells; any → company/category entries citing its id.
     related: list[ContextEntrySummary]
 
+
+
+# ───────── Clearance campaigns ─────────
+
+
+class CampaignOfferView(CampaignOffer):
+    product_name: str
+    unit: str
+    list_price: float  # catalogue price € HT / unit
+    sold: float  # accepted in calls of this campaign (orders not cancelled)
+    remaining: float  # still to clear: min(qty − sold, what is left in the lot)
+
+
+class CampaignCallView(CampaignCall):
+    client_name: str
+    order_number: str | None = None
+    order_status: str | None = None
+    open_offers: int  # offers of this call that still have stock
+
+
+class CampaignStats(Schema):
+    calls: int
+    done: int  # not pending / in progress
+    accepted: int
+    declined: int
+    qty_sold: float
+    revenue_ht: float  # sum of accepted lines (discounted)
+    discount_given_ht: float  # vs the client's usual price
+
+
+class CampaignSummary(Campaign):
+    stats: CampaignStats
+
+
+class CampaignDetail(CampaignSummary):
+    offers: list[CampaignOfferView]  # type: ignore[assignment]
+    calls: list[CampaignCallView]
+
+
+class NextCall(Schema):
+    call: CampaignCallView | None = None  # absent = nothing left to call
+    pending: int
+
+
+class BriefContact(Schema):
+    name: str
+    role: str | None = None
+
+
+class BriefClient(Schema):
+    id: Id
+    name: str
+    type: str
+    city: str
+    contact: BriefContact | None = None
+    status: ClientStatus
+    preferences: str
+    notes: list[str]  # last notes, newest first
+    delivery_days: list[str]
+    overdue: float  # € TTC
+    open_issues: int
+
+
+class BriefOffer(Schema):
+    offer_id: Id
+    product_id: Id
+    product_name: str
+    unit: str
+    origin: str | None = None
+    caliber: str | None = None
+    remaining: float
+    expires_at: IsoDate
+    usual_qty: float | None = None  # what this client usually orders (avg qty)
+    usual_price: float  # the client's normal price € HT / unit
+    offer_price: float  # at the opening discount
+    discount_pct: float
+    max_discount_pct: float
+    floor_price: float  # at the max discount: never announce it
+
+
+class CallBrief(Schema):
+    """Everything the agent needs to make one call, compact."""
+
+    call_id: Id
+    campaign_id: Id
+    status: str
+    attempts: int
+    reason: str | None = None
+    delivery_date: IsoDate
+    client: BriefClient
+    offers: list[BriefOffer]  # only offers with stock left and deliverable before expiry
+    context: list[str]  # client context entries: "title: body"
+    accepted: list[CampaignCallLine] | None = None
+    order_id: Id | None = None
+
+
+class CampaignQuote(Schema):
+    offer_id: Id
+    product_name: str
+    unit: str
+    discount_pct: float
+    usual_price: float
+    unit_price: float  # € HT / unit after discount
+    qty: float | None = None
+    total_ht: float | None = None
+    remaining: float
+    delivery_date: IsoDate
+    expires_at: IsoDate
+
+
+class CampaignAcceptResult(Schema):
+    call: CampaignCallView
+    order: OrderDetail
+
+
+class DemoLot(Schema):
+    """A surplus lot added by the demo scenario (POST /api/admin/demo/short-dated)."""
+
+    lot_id: Id
+    product_id: Id
+    product_name: str
+    unit: str
+    qty: float
+    expires_at: IsoDate
+    daily_demand: float  # average over the last 28 days, in the product's unit
+
+
+# ───────── Clearance model (GET /api/campaigns/proposal) ─────────
+
+
+class ProposalOffer(Schema):
+    offer_id: Id
+    product_id: Id
+    lot_id: Id | None = None
+    qty: float
+    expires_at: IsoDate
+    discount_pct: float
+    max_discount_pct: float
+
+
+class ProposalTarget(Schema):
+    client_id: Id
+    offer_ids: list[Id]
+    score: float
+    reason: str | None = None
+
+
+class ProposalCampaign(Schema):
+    """Exactly the body of POST /api/campaigns/import."""
+
+    name: str
+    offers: list[ProposalOffer]
+    targets: list[ProposalTarget]
+    close_others: bool
+
+
+class ProposalAnalysis(Schema):
+    """Why this offer: the expected loss and the discount that recovers the most."""
+
+    offer_id: Id
+    product_id: Id
+    product_name: str
+    unit: str
+    expected_loss: float  # qty lost if nothing is done
+    loss_value: float  # € at cost
+    loss_date: IsoDate
+    sell_by: IsoDate  # announced "keeps until" + last delivery day
+    discount_pct: float | None = None
+    max_discount_pct: float | None = None
+    floor_price: float | None = None  # € / unit: below, donating pays more
+    targets: int
+    expected_cleared: float
+    expected_recovered: float  # € HT
+    note: str | None = None
+
+
+class ClearanceProposal(Schema):
+    campaign: ProposalCampaign
+    analysis: list[ProposalAnalysis]
+    total_loss_value: float  # € at cost, all products above the threshold
+    params: dict[str, float | int | list[float]]

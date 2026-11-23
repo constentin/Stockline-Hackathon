@@ -529,3 +529,141 @@ export interface ContextForEntity {
 }
 
 export type { ActivityEvent, Client, Invoice, Order, Payment, Product, PurchaseOrder, Route, RouteRun, StockLevel, Supplier };
+
+// ── Clearance campaigns (outbound calls) ──
+//  GET   /api/campaigns                          → CampaignSummary[] (newest first)
+//  POST  /api/campaigns/import                   body CampaignImportInput → CampaignDetail
+//  GET   /api/campaigns/:id                      → CampaignDetail
+//  PATCH /api/campaigns/:id                      body { name?, status? } → CampaignDetail
+//  GET   /api/campaigns/:id/next-call            → NextCall
+//  GET   /api/campaign-calls/:id                 → CampaignCallView
+//  GET   /api/campaign-calls/:id/brief           → CallBrief (what the voice agent reads)
+//  GET   /api/campaign-calls/:id/quote?offerId=&pct=&qty= → CampaignQuote
+//  POST  /api/campaign-calls/:id/accept          body { offerId, qty, discountPct? } → { call, order }
+//  PATCH /api/campaign-calls/:id                 body { status?, summary?, callbackAt? } → CampaignCallView
+
+export type CampaignStatus = "active" | "closed";
+export type CampaignCallStatus =
+  | "pending" | "skipped" | "in_progress" | "accepted" | "declined" | "callback" | "no_answer" | "do_not_call";
+
+export interface CampaignOffer {
+  id: Id; // "off_1"
+  productId: Id;
+  lotId?: Id;
+  qty: number;
+  expiresAt: IsoDate;
+  discountPct: number; // opening discount on the client's usual price
+  maxDiscountPct: number; // enforced by the backend
+}
+
+export interface CampaignOfferView extends CampaignOffer {
+  productName: string;
+  unit: string;
+  listPrice: number;
+  sold: number;
+  remaining: number;
+}
+
+export interface CampaignCallLine {
+  offerId: Id;
+  productId: Id;
+  qty: number;
+  discountPct: number;
+  unitPrice: number;
+  lineId?: Id;
+}
+
+export interface CampaignCall {
+  id: Id; // "ccl_000001"
+  campaignId: Id;
+  clientId: Id;
+  offerIds: Id[];
+  score: number;
+  reason?: string;
+  rank: number;
+  status: CampaignCallStatus;
+  skipReason?: string;
+  deliveryDate: IsoDate;
+  orderId?: Id;
+  accepted?: CampaignCallLine[];
+  summary?: string;
+  callbackAt?: string;
+  attempts: number;
+  startedAt?: string;
+  endedAt?: string;
+}
+
+export interface CampaignCallView extends CampaignCall {
+  clientName: string;
+  orderNumber?: string;
+  orderStatus?: string;
+  openOffers: number; // offers of this call that still have stock
+}
+
+export interface CampaignStats {
+  calls: number;
+  done: number;
+  accepted: number;
+  declined: number;
+  qtySold: number;
+  revenueHt: number;
+  discountGivenHt: number;
+}
+
+export interface Campaign {
+  id: Id;
+  name: string;
+  status: CampaignStatus;
+  offers: CampaignOffer[];
+  createdAt: string;
+  createdBy: string;
+}
+
+export interface CampaignSummary extends Campaign {
+  stats: CampaignStats;
+}
+
+export interface CampaignDetail extends Omit<CampaignSummary, "offers"> {
+  offers: CampaignOfferView[];
+  calls: CampaignCallView[];
+}
+
+export interface NextCall {
+  call?: CampaignCallView; // absent = nothing left to call
+  pending: number;
+}
+
+export interface CampaignImportInput {
+  campaignId?: Id;
+  name?: string;
+  offers: { offerId: Id; productId: Id; lotId?: Id; qty: number; expiresAt?: IsoDate; discountPct: number; maxDiscountPct: number }[];
+  targets: { clientId: Id; offerIds: Id[]; score?: number; reason?: string }[];
+  closeOthers?: boolean; // close the campaigns still active (same stock sold twice otherwise)
+}
+
+// ── Clearance model: GET /api/campaigns/proposal (nothing written; `campaign` goes to POST /api/campaigns/import) ──
+
+export interface ProposalAnalysis {
+  offerId: Id;
+  productId: Id;
+  productName: string;
+  unit: string;
+  expectedLoss: number; // qty lost if nothing is done
+  lossValue: number; // € at cost
+  lossDate: IsoDate;
+  sellBy: IsoDate; // announced "keeps until" + last delivery day
+  discountPct?: number;
+  maxDiscountPct?: number;
+  floorPrice?: number; // € / unit: below, donating pays more
+  targets: number;
+  expectedCleared: number;
+  expectedRecovered: number; // € HT
+  note?: string; // why the offer is not in the campaign
+}
+
+export interface ClearanceProposal {
+  campaign: CampaignImportInput & { name: string; closeOthers: boolean };
+  analysis: ProposalAnalysis[];
+  totalLossValue: number;
+  params: Record<string, number | number[]>;
+}

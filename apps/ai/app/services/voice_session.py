@@ -12,6 +12,12 @@ One turn:
 
 Barge-in: a new audio_start / text while the agent is still busy cancels the running turn (asyncio
 cancellation); what was heard and said so far stays in the history.
+
+Outbound clearance call: `start` with campaignCallId → fresh history, the call brief at the end of the system prompt
+(services/outbound.py), mode "outbound" with its own tools, "call_started", then a first turn on a bracketed cue so the
+AGENT speaks first. `hangup` stops the agent, records the outcome if the agent did not, sends "call_ended".
+The brief is not refreshed during the call: changing the system prompt would invalidate the cached history after it
+(the campaign tools return fresh quantities anyway).
 """
 
 import asyncio
@@ -38,8 +44,11 @@ from app.schemas import (
     AgentToolMessage,
     AudioEndMessage,
     AudioStartMessage,
+    CallEndedMessage,
+    CallStartedMessage,
     ChatMessage,
     ErrorEvent,
+    HangupMessage,
     ReadyMessage,
     ResetMessage,
     StartMessage,
@@ -53,8 +62,10 @@ from app.schemas import (
     VoiceErrorMessage,
 )
 from app.schemas.base import WireModel
-from app.tools import all_tools
+from app.tools import all_tools, outbound_tools
+from app.tools.erp import ErpError
 
+from .outbound import OPENING_CUE, OutboundCall, end_call, start_call
 from .utterance import Utterance
 from .vocabulary import stt_hint
 
@@ -66,6 +77,7 @@ class Conversation:
     id: str
     actor_name: str | None = None
     history: list[ChatMessage] = field(default_factory=list)
+    call: OutboundCall | None = None  # an outbound clearance call in progress
 
 
 # In memory: a reconnect with the same sessionId continues the conversation.
@@ -128,9 +140,11 @@ class VoiceConnection:
             await self.open()  # no "start" yet: open a fresh conversation
 
         match msg:
-            case StartMessage(session_id=session_id, actor_name=actor_name):
+            case StartMessage(session_id=session_id, actor_name=actor_name, campaign_call_id=call_id):
                 await self.interrupt()
-                await self.open(session_id, actor_name)
+                await self.open(session_id, actor_name, fresh=bool(call_id))
+                if call_id:
+                    await self.dial(call_id)
             case AudioStartMessage(mime=mime, hint=hint):
                 await self.interrupt()  # barge-in
                 self.recording = Utterance(get_stt_client(), mime, hint, on_partial=self.send_partial)
@@ -145,12 +159,17 @@ class VoiceConnection:
                 await self.interrupt()
                 self.conversation.history = []
                 await self.open(self.conversation.id)
+            case HangupMessage():
+                await self.interrupt()
+                await self.hang_up()
 
     async def send_partial(self, update: STTUpdate) -> None:
         await self.send(TranscriptMessage(text=update.text, final=False, stable=update.stable))
 
-    async def open(self, session_id: str | None = None, actor_name: str | None = None) -> None:
-        conv = conversations.get(session_id or "") or Conversation(id=session_id or str(uuid.uuid4()))
+    async def open(self, session_id: str | None = None, actor_name: str | None = None, fresh: bool = False) -> None:
+        """fresh: a new history even if the sessionId is known (each outbound call starts clean)."""
+        known = None if fresh else conversations.get(session_id or "")
+        conv = known or Conversation(id=session_id or str(uuid.uuid4()))
         if actor_name:
             conv.actor_name = actor_name
         conversations[conv.id] = self.conversation = conv
@@ -160,6 +179,40 @@ class VoiceConnection:
         )
         # Fetch the company vocabulary for the STT now, not when the caller first speaks.
         self.warm_up = self.warm_up or asyncio.create_task(stt_hint(get_stt_client().name, None))
+
+    # ── outbound call ──
+
+    async def dial(self, call_id: str) -> None:
+        """Load the call (brief, in_progress), announce it, and let the agent speak first."""
+        conv = self.conversation
+        try:
+            conv.call = await start_call(call_id, conv.actor_name)
+        except ErpError as e:
+            await self.send(VoiceErrorMessage(message=f"Appel {call_id} impossible : {e}"))
+            return
+        def fr(n: float, fmt: str) -> str:
+            return format(n, fmt).replace(".", ",")
+
+        units = {"piece": "pièces", "box": "colis", "dozen": "douzaines", "liter": "litres"}
+
+        offers = [
+            f"{o['productName']} : {fr(round(o['remaining'], 1), 'g')} {units.get(o['unit'], o['unit'])} à {fr(o['offerPrice'], '.2f')} € (−{fr(o['discountPct'], 'g')} %)"
+            for o in conv.call.brief.get("offers", [])
+        ]
+        await self.send(CallStartedMessage(call_id=call_id, client_name=conv.call.client_name, offers=offers))
+        self.start_turn(text=OPENING_CUE, cue=True)
+
+    async def hang_up(self) -> None:
+        conv = self.conversation
+        if not conv or not conv.call:
+            return
+        call, conv.call = conv.call, None
+        try:
+            outcome = await end_call(call, conv.history, conv.actor_name)
+        except ErpError as e:
+            await self.send(VoiceErrorMessage(message=f"Résultat de l'appel non enregistré : {e}"))
+            outcome = None
+        await self.send(CallEndedMessage(call_id=call.call_id, outcome=outcome))
 
     def start_turn(self, **turn_input) -> None:
         self.turn = asyncio.create_task(self.run_turn(self.conversation, **turn_input))
@@ -182,6 +235,7 @@ class VoiceConnection:
         conv: Conversation,
         text: str | None = None,
         utterance: Utterance | None = None,  # spoken: already being transcribed since audio_start
+        cue: bool = False,  # a bracketed cue from the "switchboard" (outbound opening): not shown as caller speech
     ) -> None:
         t0 = time.perf_counter()  # end of caller speech
         timings = TurnTimings()
@@ -199,13 +253,22 @@ class VoiceConnection:
             if not heard:
                 await self.send(VoiceErrorMessage(message="Rien entendu — réessayez."))
                 return
-            await self.send(TranscriptMessage(text=heard, final=True))
+            if not cue:
+                await self.send(TranscriptMessage(text=heard, final=True))
 
             # 2. Agent, on a working copy of the history (committed at the end)
             working = [*conv.history, ChatMessage(role="user", content=heard)]
             speaker = Speaker(get_tts_client(), self.send, self.send_bytes)
             llm_start = time.perf_counter()
-            async for ev in run_agent(working, llm=get_llm_client(), tools=all_tools(), mode="voice", actor_name=conv.actor_name):
+            call = conv.call
+            async for ev in run_agent(
+                working,
+                llm=get_llm_client(),
+                tools=outbound_tools() if call else all_tools(),
+                mode="outbound" if call else "voice",
+                actor_name=conv.actor_name,
+                system_extra=call.prompt if call else None,
+            ):
                 match ev:
                     case TextEvent(delta=delta):
                         if timings.llm_first_token_ms is None:

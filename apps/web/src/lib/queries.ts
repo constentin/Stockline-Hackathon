@@ -31,6 +31,12 @@ import { setCategories } from "./labels";
 // ── Query keys (prefix-based: invalidating qk.orders.all refreshes every orders list + detail) ──
 export const qk = {
   meta: ["meta"] as const,
+  campaigns: {
+    all: ["campaigns"] as const,
+    list: ["campaigns", "list"] as const,
+    detail: (id: Id) => ["campaigns", "detail", id] as const,
+    call: (id: Id) => ["campaigns", "call", id] as const,
+  },
   categories: ["categories"] as const,
   dashboard: ["dashboard"] as const,
   search: (q: string, types?: SearchType[]) => ["search", q, types ?? []] as const,
@@ -254,22 +260,28 @@ export const useContextPage = (p?: ContextListParams) =>
   useQuery({ queryKey: qk.context.page(clean(p)), queryFn: () => api.context.page(clean(p)), placeholderData: keepPreviousData });
 export const useContextEntry = (id?: Id) =>
   useQuery({ queryKey: [...qk.context.all, "one", id] as const, queryFn: () => api.context.get(id!), enabled: !!id });
+export const useCampaigns = () => useQuery({ queryKey: qk.campaigns.list, queryFn: api.campaigns.list });
+export const useCampaign = (id?: Id) =>
+  useQuery({ queryKey: qk.campaigns.detail(id!), queryFn: () => api.campaigns.get(id!), enabled: !!id, placeholderData: keepPreviousData });
+export const useCampaignCall = (id?: Id) =>
+  useQuery({ queryKey: qk.campaigns.call(id!), queryFn: () => api.campaigns.call(id!), enabled: !!id });
 export const useContextFor = (scope: ContextScope, id?: Id) =>
   useQuery({ queryKey: qk.context.for(scope, id!), queryFn: () => api.context.for(scope, id!), enabled: !!id });
 
 // ── Live activity stream (SSE) ──
 /** Which query roots to refresh when an entity changes. Add a line when you add an entity/page. */
 export const INVALIDATE: Record<ActivityEvent["entity"], QueryKey[]> = {
-  client: [qk.clients.all, qk.dashboard, qk.tags.all, qk.pricing.all, qk.history.all],
+  client: [qk.clients.all, qk.dashboard, qk.tags.all, qk.pricing.all, qk.history.all, qk.campaigns.all],
   supplier: [qk.suppliers.all, qk.tags.all, qk.history.all],
   product: [qk.products.all, qk.stock.all, qk.tags.all, qk.pricing.all],
   stock: [qk.stock.all, qk.products.all, qk.dashboard],
-  order: [qk.orders.all, qk.clients.all, qk.stock.all, qk.products.all, qk.routeRuns.all, qk.invoices.all, qk.dashboard],
+  order: [qk.orders.all, qk.clients.all, qk.stock.all, qk.products.all, qk.routeRuns.all, qk.invoices.all, qk.dashboard, qk.campaigns.all],
   purchase_order: [qk.purchaseOrders.all, qk.stock.all, qk.products.all, qk.suppliers.all, qk.dashboard],
   invoice: [qk.invoices.all, qk.orders.all, qk.clients.all, qk.payments.all, qk.dashboard],
   payment: [qk.payments.all, qk.invoices.all, qk.clients.all, qk.dashboard],
   route_run: [qk.routeRuns.all, qk.orders.all],
   context: [qk.context.all],
+  campaign: [qk.campaigns.all, qk.orders.all, qk.clients.all, qk.history.all],
 };
 
 export type StreamStatus = "connecting" | "live" | "offline";

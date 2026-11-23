@@ -315,7 +315,7 @@ export interface ActivityEvent {
   actor: Actor;
   actorName?: string;
   type: string; // "order.created", "order.confirmed", "payment.recorded", ...
-  entity: "client" | "supplier" | "product" | "stock" | "order" | "purchase_order" | "invoice" | "payment" | "route_run" | "context";
+  entity: "client" | "supplier" | "product" | "stock" | "order" | "purchase_order" | "invoice" | "payment" | "route_run" | "context" | "campaign";
   entityId: Id;
   summary: string; // French human sentence: "Commande CMD-… confirmée pour Le Bistrot du Port"
 }

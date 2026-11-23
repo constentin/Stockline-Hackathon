@@ -3,6 +3,7 @@
  * Mic → MediaRecorder (webm/opus) chunks every 100 ms, streamed as binary frames between audio_start and audio_end:
  * the server transcribes them as they arrive and sends `transcript` final:false (live text) before the final one.
  * Agent audio: binary frames between agent_audio_start/end → one Blob → <audio>. Mock TTS → speechSynthesis (fr-FR).
+ * Outbound clearance call: dial(callId) restarts the session on that call (the agent speaks first), hangUp() ends it.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MOCK_TTS_MIME, type TurnTimings, type VoiceClientMessage, type VoiceServerMessage } from "@kit/shared";
@@ -17,7 +18,7 @@ export type MicState = "unknown" | "granted" | "denied" | "unsupported";
 export interface VoiceTurn {
   id: number;
   /** text: live while recording/transcribing (stable = its final words), definitive once status is "final". */
-  caller: { text: string; stable?: string; at: number; status: "recording" | "transcribing" | "final"; typed?: boolean };
+  caller: { text: string; stable?: string; at: number; status: "recording" | "transcribing" | "final"; typed?: boolean; cue?: boolean };
   agent: { text: string; at?: number; tools: ToolRun[]; done: boolean; error?: string; interrupted?: boolean };
   timings?: TurnTimings;
   /** Client-side: caller release → agent audio actually starts playing (or speech synthesis starts). */
@@ -25,6 +26,17 @@ export interface VoiceTurn {
 }
 
 export interface Providers { llm: string; stt: string; tts: string; sessionId: string }
+
+/** The outbound call of the session: dialing → live (call_started) → ending (hangup sent) → ended (call_ended). */
+export interface OutboundCallState {
+  callId: string;
+  clientName: string;
+  offers: string[];
+  status: "dialing" | "live" | "ending" | "ended";
+  /** recorded at hang-up by the server; null = the agent had recorded it itself */
+  outcome?: string | null;
+  error?: string;
+}
 
 const REC_MIME = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
 const wsUrl = () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${AI_BASE}/voice`;
@@ -37,6 +49,7 @@ export function useVoiceSession() {
   const [turns, setTurns] = useState<VoiceTurn[]>([]);
   const [level, setLevel] = useState(0);
   const [lastError, setLastError] = useState<string>();
+  const [call, setCall] = useState<OutboundCallState>();
 
   const ws = useRef<WebSocket>();
   const sessionId = useRef<string>();
@@ -182,8 +195,18 @@ export function useVoiceSession() {
         audioMime.current = undefined;
         currentTurn.current = undefined;
         break;
+      case "call_started":
+        setCall((c) => ({ ...(c ?? { callId: m.callId }), callId: m.callId, clientName: m.clientName, offers: m.offers, status: "live" }));
+        newTurn({ text: `Appel sortant vers ${m.clientName}`, at: Date.now(), status: "final", cue: true });
+        setActivity("thinking");
+        break;
+      case "call_ended":
+        setCall((c) => (c && c.callId === m.callId ? { ...c, status: "ended", outcome: m.outcome ?? null } : c));
+        break;
       case "error":
         setLastError(m.message);
+        // The call could not start (ERP refused): end it here, there will be no call_started.
+        setCall((c) => (c?.status === "dialing" ? { ...c, status: "ended", error: m.message } : c));
         if (id != null) patchTurn(id, (t) => ({ ...t, caller: { ...t.caller, status: "final" }, agent: { ...t.agent, done: true, error: m.message } }));
         currentTurn.current = undefined;
         setActivity((a) => (a === "thinking" ? "idle" : a));
@@ -311,6 +334,26 @@ export function useVoiceSession() {
     setLastError(undefined);
   }, [conn, newTurn, send, stopPlayback]);
 
+  /** Start an outbound call: fresh history server-side, then call_started and the agent's opening turn. */
+  const dial = useCallback((callId: string) => {
+    if (conn !== "ready") return;
+    stopPlayback();
+    currentTurn.current = undefined;
+    setTurns([]);
+    setCall({ callId, clientName: "", offers: [], status: "dialing" });
+    releasedAt.current = performance.now(); // perceived latency of the opening = click → first audio
+    send({ type: "start", sessionId: sessionId.current, actorName: "Agent vocal", campaignCallId: callId });
+    setActivity("thinking");
+    setLastError(undefined);
+  }, [conn, send, stopPlayback]);
+
+  const hangUp = useCallback(() => {
+    stopPlayback();
+    send({ type: "hangup" });
+    setCall((c) => (c && c.status !== "ended" ? { ...c, status: "ending" } : c));
+    setActivity("idle");
+  }, [send, stopPlayback]);
+
   const reset = useCallback(() => {
     stopPlayback();
     send({ type: "reset" });
@@ -321,7 +364,7 @@ export function useVoiceSession() {
   }, [send, stopPlayback]);
 
   return {
-    conn, activity, mic, providers, turns, level, lastError,
-    startTalking, stopTalking, sendText, stopPlayback, reset, reconnect: connect,
+    conn, activity, mic, providers, turns, level, lastError, call,
+    startTalking, stopTalking, sendText, stopPlayback, reset, reconnect: connect, dial, hangUp,
   };
 }

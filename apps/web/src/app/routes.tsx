@@ -25,6 +25,7 @@ import HistoryPage from "@/pages/history";
 import PricesPage from "@/pages/prices";
 import GroupsPage from "@/pages/groups";
 import ContextPage from "@/pages/context";
+import CampaignsPage from "@/pages/campaigns";
 
 export const router = createBrowserRouter([
   {
@@ -54,6 +55,7 @@ export const router = createBrowserRouter([
       { path: "prices", element: <PricesPage /> },
       { path: "groups", element: <GroupsPage /> },
       { path: "context", element: <ContextPage /> },
+      { path: "campaigns", element: <CampaignsPage /> },
       { path: "*", element: <NotFound /> },
     ],
   },

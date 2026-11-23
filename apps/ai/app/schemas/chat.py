@@ -12,7 +12,7 @@ from pydantic import Field
 from .base import WireModel
 
 ChatRole = Literal["system", "user", "assistant", "tool"]
-ChatMode = Literal["chat", "voice", "command"]
+ChatMode = Literal["chat", "voice", "command", "outbound"]  # outbound = the agent calls a client (clearance campaign)
 
 
 class ToolCall(WireModel):
