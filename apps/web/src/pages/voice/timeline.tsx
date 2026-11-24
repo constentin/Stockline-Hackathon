@@ -105,17 +105,19 @@ function TurnRows({ t, last, activity, level }: { t: VoiceTurn; last: boolean; a
             {thinking ? (
               <span className="flex h-8 items-center gap-2 text-[12px] text-violet"><Spinner size={12} />Réflexion…</span>
             ) : null}
-            {a.text ? (
+            {/* one bubble per reply: the agent's immediate words, then its answer with what it found ("\n" between) */}
+            {a.text.split("\n").filter((part) => part.trim()).map((part, i, parts) => (
               <div
+                key={i}
                 className={cn(
                   "max-w-full whitespace-pre-wrap rounded-[4px] border border-violet/25 bg-violet/[.05] px-3 py-2 text-[13px]",
-                  !a.done && "after:ml-0.5 after:inline-block after:h-3 after:w-[2px] after:animate-pulse after:bg-violet after:align-middle after:content-['']",
-                  last && activity === "speaking" && "ring-2 ring-violet/20",
+                  !a.done && i === parts.length - 1 && "after:ml-0.5 after:inline-block after:h-3 after:w-[2px] after:animate-pulse after:bg-violet after:align-middle after:content-['']",
+                  last && activity === "speaking" && i === parts.length - 1 && "ring-2 ring-violet/20",
                 )}
               >
-                {a.text}
+                {part.trim()}
               </div>
-            ) : null}
+            ))}
             {a.error ? (
               <span className="flex items-start gap-1.5 text-[12px] text-destructive"><CircleAlert size={13} strokeWidth={1.75} className="mt-[2px] shrink-0" />{a.error}</span>
             ) : null}

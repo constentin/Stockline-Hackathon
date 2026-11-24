@@ -24,6 +24,7 @@ class LLMRequest:
     messages: list[ChatMessage]  # user / assistant (with tool_calls) / tool (with tool_call_id + name)
     tools: list[ToolInfo] = field(default_factory=list)
     max_tokens: int | None = None
+    no_thinking: bool = False  # a tiny, immediate answer: no reasoning before the first word (Anthropic)
     speak_only: bool = False  # tools stay declared (the history has tool calls) but the model may not call any
 
 

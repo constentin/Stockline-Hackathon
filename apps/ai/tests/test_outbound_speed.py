@@ -267,9 +267,88 @@ async def test_listener_ends_turn_sooner_when_sentence_is_finished(monkeypatch):
 # ── waiting phrases ──
 
 
-def test_filler_never_twice_in_a_row(monkeypatch):
-    class T:
-        name, model, voice = "fake", "m", "v"
+class FakeTTS:
+    name, model, voice = "fake", "m", "v"
 
-    monkeypatch.setitem(fillers._clips, ("fake", "m", fillers.settings.tts.voice or "v"), [fillers.Clip("A", "audio/mpeg", b"1"), fillers.Clip("B", "audio/mpeg", b"2")])
-    assert all(fillers.pick(T(), "A").text == "B" for _ in range(10))
+
+def clips(*specs):
+    return [fillers.Clip(text, "audio/mpeg", b"x" * 1600, topic, level) for text, topic, level in specs]
+
+
+def test_filler_fits_the_topic_and_avoids_repeats(monkeypatch):
+    key = ("fake", "m", fillers.settings.tts.voice or "v")
+    monkeypatch.setitem(fillers._clips, key, clips(
+        ("Je regarde.", "general", 1), ("Je regarde les stocks.", "stock", 1), ("Je vérifie le stock.", "stock", 1),
+        ("Je regarde si je peux faire une réduction de ce type.", "price", 2),
+    ))  # fmt: skip
+    assert fillers.pick(FakeTTS(), "stock", 1, ["Je regarde les stocks."]).text == "Je vérifie le stock."
+    assert fillers.pick(FakeTTS(), "price", 1).text == "Je regarde."  # no level-1 price phrase: a general one
+    assert fillers.pick(FakeTTS(), "price", 2).text.startswith("Je regarde si je peux")
+    assert fillers.pick(FakeTTS(), "stock", 3) is None
+
+
+async def test_patience_gets_longer_while_the_agent_works(monkeypatch):
+    from app.services.voice_session import Conversation, Patience
+
+    key = ("fake", "m", fillers.settings.tts.voice or "v")
+    monkeypatch.setitem(fillers._clips, key, clips(("Je regarde.", "stock", 1), ("Je regarde dans les stocks.", "stock", 2),
+                                                   ("Merci de patienter, je vérifie les lots.", "stock", 3)))  # fmt: skip
+    monkeypatch.setattr(Patience, "STEPS", [(0.05, 2), (0.1, 3)])
+    monkeypatch.setattr(Patience, "GAP_S", 0.0)
+    said: list[str] = []
+    p = Patience(lambda c: said.append(c.text), FakeTTS(), Conversation(id="x"))
+    assert p.start("stock") == "Je regarde."
+    await asyncio.sleep(0.4)
+    assert said == ["Je regarde.", "Je regarde dans les stocks.", "Merci de patienter, je vérifie les lots."]
+
+    said.clear()
+    p = Patience(lambda c: said.append(c.text), FakeTTS(), Conversation(id="y"))
+    p.start("stock")
+    p.stop()  # the answer came quickly: nothing more
+    await asyncio.sleep(0.2)
+    assert said == ["Je regarde."]
+
+    # safety net: nothing said after SAFETY_S → a waiting phrase anyway; an answer before it → nothing
+    monkeypatch.setattr(Patience, "SAFETY_S", 0.05)
+    said.clear()
+    loop = asyncio.get_running_loop()
+    p = Patience(lambda c: said.append(c.text), FakeTTS(), Conversation(id="z"))
+    p.arm(__import__("time").perf_counter(), "stock")
+    await asyncio.sleep(0.08)
+    p.stop()
+    assert said == ["Je regarde."]
+    said.clear()
+    p = Patience(lambda c: said.append(c.text), FakeTTS(), Conversation(id="w"))
+    p.arm(__import__("time").perf_counter(), "stock")
+    p.stop()
+    await asyncio.sleep(0.1)
+    assert said == []
+
+
+# ── the agent's immediate reply (two replies: this one at once, then the answer) ──
+
+
+class Streams(LLMClient):
+    provider, model = "test", "fast"
+
+    def __init__(self, *chunks: str):
+        self.chunks = chunks
+
+    async def stream(self, req: LLMRequest):
+        assert req.no_thinking and not req.tools  # tiny and immediate
+        for c in self.chunks:
+            yield LLMText(c)
+
+
+async def immediate(monkeypatch, *chunks: str) -> str:
+    import app.services.ack as ack
+
+    monkeypatch.setattr(ack, "get_fast_llm_client", lambda: Streams(*chunks))
+    return "".join([d async for d in ack.first_reply("Vous pouvez faire mieux sur 40 kilos ?", "Ça vous intéresse ?", ["Moule de bouchot"])])
+
+
+async def test_immediate_reply_one_sentence_or_nothing(monkeypatch):
+    said = await immediate(monkeypatch, "«Quarante kilos", " de moules, je regarde le prix.» Hmm, the instruction", " says…")
+    assert said == "Quarante kilos de moules, je regarde le prix."  # the comment after the sentence is dropped
+    assert await immediate(monkeypatch, "RI", "EN") == ""  # nothing to check: no first reply
+    assert await immediate(monkeypatch, "Rien de tel, je vérifie le stock.") == "Rien de tel, je vérifie le stock."

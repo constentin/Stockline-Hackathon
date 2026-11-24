@@ -54,7 +54,9 @@ class AnthropicLLM(LLMClient):
         }
         if req.system:  # a list of blocks so it can carry a cache breakpoint
             body["system"] = [{"type": "text", "text": req.system, "cache_control": CACHE}]
-        if self.effort:
+        if req.no_thinking:
+            body["thinking"] = {"type": "disabled"}
+        elif self.effort:
             body["output_config"] = {"effort": self.effort}
         if req.tools:
             body["tools"] = [{"name": t.name, "description": t.description, "input_schema": t.parameters} for t in req.tools]
