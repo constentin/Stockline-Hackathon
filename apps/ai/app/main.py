@@ -7,6 +7,7 @@ AI service entry point: HTTP routes + WS /voice on the same port (AI_PORT, defau
 API docs: http://localhost:4100/docs — the contract (all events and WS messages) is in /openapi.json.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -21,6 +22,7 @@ from app.clients import ConfigError, get_llm_client, get_stt_client, get_tts_cli
 from app.clients.http import http_client
 from app.config import settings
 from app.routers import routers
+from app.services import fillers
 from app.tools.erp import close_erp_http
 from app.schemas import ChatStreamEvent, CommandRequest, CommandStreamEvent, ErrorResponse, VoiceClientMessage, VoiceServerMessage
 
@@ -33,7 +35,11 @@ async def lifespan(_app: FastAPI):
         raise SystemExit(f"[ai] configuration error: {e}\n     see apps/ai/README.md and .env.example") from None
     print(f"[ai] http://localhost:{settings.port}  (WS /voice, docs /docs)")
     print(f"[ai] llm={llm.provider}:{llm.model}  stt={stt.name}  tts={tts.name}  erp={settings.erp_api_url}", flush=True)
+    # The waiting phrases (« Je regarde les stocks. »…) are synthesized now, in the background: ready before the
+    # first call instead of during it (services/fillers.py). Browser voice first, then the phone one.
+    warming = asyncio.create_task(fillers.warm_all())
     yield
+    warming.cancel()
     await http_client().aclose()
     await close_erp_http()
 

@@ -84,6 +84,7 @@ export interface TurnTimings {
   action?: string; // what the code did before the model (confirmed, declined, do_not_call)
   model?: string; // the model that answered
   fillerMs?: number; // end of caller speech → pre-recorded waiting phrase sent
+  ackMs?: number; // end of caller speech → first word of the agent's immediate reply (small model, services/ack.py)
 }
 /** The TurnTimings fields that are durations in ms (not intent / action / model). */
 export type TurnTimingMs = { [K in keyof TurnTimings]-?: NonNullable<TurnTimings[K]> extends number ? K : never }[keyof TurnTimings];

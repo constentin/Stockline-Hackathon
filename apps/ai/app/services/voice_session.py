@@ -23,7 +23,11 @@ Outbound turns, for speed and reliability:
   - Jev routing (services/router.py), started on the last partial transcript (push-to-talk: at audio_end, while the
     STT finalizes; hands-free: as soon as the words stop changing), so it is usually ready when the turn starts;
     services/outbound.py plan_turn then picks the model and, when Jev is sure, does the ERP action by code;
-  - a pre-recorded waiting phrase (services/fillers.py) the moment the model calls a tool before speaking;
+  - TWO replies when the agent has work to do: an immediate one from the small model, about what the caller just
+    asked (services/ack.py: « Quarante kilos de moules, je regarde ce que je peux faire sur le prix. »), then the
+    big model's answer with what it found; the big model is told the first one was said;
+  - pre-recorded waiting phrases (services/fillers.py, Patience below), as a safety net: a short one the moment the model works
+    before speaking, longer ones if it lasts (« Je regarde dans les stocks. » → « Merci de patienter, je vérifie… »);
   - the call's own words (products, contact) first in the STT vocabulary;
   - hands-free mode (`listen_start`, services/listener.py): the mic streams the whole call, the server detects the
     end of each sentence and the caller interrupting the agent (`caller_speaking`); the agent's own voice coming back
@@ -43,8 +47,9 @@ from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
 
 from app.agent import run_agent, sanitize_history
+from app.agent.prompts import OUTBOUND_AGENT_NAME
 from app.agent.loop import ms_since
-from app.clients import STTUpdate, TTSClient, get_llm_client, get_stt_client, get_tts_client
+from app.clients import STTUpdate, TTSClient, get_fast_llm_client, get_llm_client, get_stt_client, get_tts_client
 from app.config import settings
 from app.schemas import (
     AgentAudioEndMessage,
@@ -81,8 +86,10 @@ from app.tools import all_tools
 from app.tools.erp import ErpError
 
 from . import fillers
+from .ack import NOTE as ACK_NOTE
+from .ack import first_reply
 from .listener import Listener
-from .outbound import OPENING_CUE, OutboundCall, end_call, plan_turn, run_outbound, start_call
+from .outbound import NOTE_SEP, OPENING_CUE, OutboundCall, end_call, plan_turn, run_outbound, start_call
 from .router import Route, classify, same_words
 from .speech_text import for_speech
 from .utterance import Utterance
@@ -104,7 +111,7 @@ class Conversation:
     actor_name: str | None = None
     history: list[ChatMessage] = field(default_factory=list)
     call: OutboundCall | None = None  # an outbound clearance call in progress
-    last_filler: str | None = None  # the waiting phrase played last (never twice in a row)
+    recent_fillers: list[str] = field(default_factory=list)  # waiting phrases heard in this call (no repeats)
 
 
 # In memory: a reconnect with the same sessionId continues the conversation.
@@ -218,20 +225,14 @@ class VoiceConnection:
         self.last_partial = update.text
         await self.send(TranscriptMessage(text=update.text, final=False, stable=update.stable))
 
-    def play_filler(self, conv: "Conversation", tts: TTSClient, speaker: "Speaker", timings: TurnTimings, t0: float) -> str:
-        """A pre-recorded waiting phrase, queued now (never the same twice in a row). Returns what it says."""
-        clip = fillers.pick(tts, conv.last_filler)
-        if not clip or timings.filler_ms is not None:
-            return ""
-        conv.last_filler = clip.text
+    def say_filler(self, conv: "Conversation", speaker: "Speaker", clip: fillers.Clip) -> None:
+        """Queue a pre-recorded waiting phrase and show it in the transcript."""
+        conv.recent_fillers = [*conv.recent_fillers, clip.text][-fillers.RECENT :]
         speaker.play(clip)
-        timings.filler_ms = ms_since(t0)
         self.agent_said += f"{clip.text} "
-        msg = AgentTextMessage(delta=f"{clip.text} ")
-        task = asyncio.create_task(self.send(msg))
+        task = asyncio.create_task(self.send(AgentTextMessage(delta=f"{clip.text} ")))
         self.background.add(task)
         task.add_done_callback(self.background.discard)
-        return f"{clip.text} "
 
     # ── routing (outbound) ──
 
@@ -320,6 +321,9 @@ class VoiceConnection:
         if actor_name:
             conv.actor_name = actor_name
         conversations[conv.id] = self.conversation = conv
+        warm = asyncio.create_task(fillers.warm(self.tts_client()))  # waiting phrases, once per voice (cached)
+        self.background.add(warm)
+        warm.add_done_callback(self.background.discard)
         llm, stt = get_llm_client(), get_stt_client()
         await self.send(
             ReadyMessage(
@@ -399,6 +403,9 @@ class VoiceConnection:
         working: list[ChatMessage] | None = None
         committed = False
         speaker: Speaker | None = None
+        patience: Patience | None = None
+        ack: asyncio.Task | None = None
+        first = {"text": "", "spoken": False, "lost": False}  # the immediate reply (services/ack.py)
         try:
             # 1. Speech → text: with a streaming STT only the last words are left to finalize
             if utterance is not None:
@@ -415,42 +422,118 @@ class VoiceConnection:
             working = [*conv.history, ChatMessage(role="user", content=heard)]
             tts = self.tts_client()
             speaker = Speaker(tts, self.send, self.send_bytes)
+            patience = Patience(lambda clip: self.say_filler(conv, speaker, clip), tts, conv)
             self.agent_said = ""
             call = conv.call
+
+            # The agent's immediate reply (small model), started NOW, in parallel with the routing and the big model.
+            # The big model's words wait (held) while it is being said; if the big model speaks first, it is dropped.
+            held: list[str] = []
+
+            async def emit(delta: str) -> None:
+                nonlocal spoken
+                spoken += delta
+                self.agent_said += delta
+                await self.send(AgentTextMessage(delta=delta))
+                speaker.push(delta)
+
+            async def immediate_reply() -> None:
+                prev = next((m.content for m in reversed(conv.history) if m.role == "assistant" and m.content), "") or ""
+                products = [o["name"] for o in call.offers] if call else []
+                agent = OUTBOUND_AGENT_NAME if call else "l'assistante vocale"
+                try:
+                    async for d in first_reply(heard, prev.split(NOTE_SEP)[0], products, conv.recent_fillers, agent):
+                        if first["lost"]:
+                            return
+                        if not first["spoken"]:
+                            first["spoken"] = True
+                            timings.ack_ms = ms_since(t0)
+                        first["text"] += d
+                        await emit(d)
+                except Exception as e:  # the small model failed: the safety-net phrases cover the wait
+                    print(f"[ai] immediate reply skipped ({type(e).__name__}: {e})", flush=True)
+                finally:
+                    if first["spoken"]:
+                        speaker.flush()  # say it NOW: no need to wait for the next sentence to know it ended
+                        conv.recent_fillers = [*conv.recent_fillers, first["text"].strip()][-fillers.RECENT :]
+                        patience.acked(len(first["text"].split()) / 2.7)  # ~2.7 words per second
+                        if held:
+                            await emit("\n" + "".join(held).lstrip())
+                            held.clear()
+
+            # only with a real provider whose small model goes with the main one (not the mock, not a test double)
+            if not cue and get_fast_llm_client().provider == get_llm_client().provider != "mock":
+                ack = asyncio.create_task(immediate_reply())
             if call:  # outbound: Jev route → plan (model, ERP action done by code) → agent with fallback
                 route, timings.route_ms = (None, None) if cue else await self.route_for(heard)
                 agent_said = next((m.content for m in reversed(conv.history) if m.role == "assistant" and m.content), "")
                 plan = await plan_turn(call, route, conv.actor_name, agent_said or "")
                 timings.intent, timings.action = (route.intent if route else None), plan.action
                 timings.model = plan.llms[0].model
+                if ack and (plan.fast or plan.action) and not first["spoken"]:  # quick turn: one reply (unless started)
+                    first["lost"] = True
+                    ack.cancel()
+                    ack = None
+                if ack:
+                    working[-1] = ChatMessage(role="user", content=f"{heard}{ACK_NOTE}")
                 events = run_outbound(working, call, plan, conv.actor_name)
-                if plan.filler_first:
-                    spoken += self.play_filler(conv, tts, speaker, timings, t0)
+                topic = fillers.INTENT_TOPIC.get(timings.intent or "", "general")
+                if not cue:  # safety net: a waiting phrase if nothing is said (later when an immediate reply is coming)
+                    patience.arm(t0, topic, delay=1.8 if ack else None)
             else:
                 llm = get_llm_client()
                 timings.model = llm.model
+                if ack:
+                    working[-1] = ChatMessage(role="user", content=f"{heard}{ACK_NOTE}")
                 events = run_agent(working, llm=llm, tools=all_tools(), mode="voice", actor_name=conv.actor_name)
+                patience.arm(t0, delay=1.8 if ack else None)
             llm_start = time.perf_counter()
             async for ev in events:
                 match ev:
                     case TextEvent(delta=delta):
+                        if delta.strip():
+                            patience.stop()  # the real answer starts: no more waiting phrases
                         if timings.llm_first_token_ms is None:
                             timings.llm_first_token_ms = ms_since(llm_start)
-                        spoken += delta
                         step_text += delta
-                        self.agent_said += delta
-                        await self.send(AgentTextMessage(delta=delta))
-                        speaker.push(delta)
+                        if ack and not ack.done():
+                            if first["spoken"]:
+                                held.append(delta)  # said right after the immediate reply
+                                continue
+                            first["lost"] = True  # the big model was faster: one reply only
+                            ack.cancel()
+                        elif first["spoken"] and not spoken.endswith("\n") and delta.strip() and step_text == delta:
+                            delta = "\n" + delta.lstrip()  # the second reply
+                        await emit(delta)
                     case ToolCallEvent(call=tool_call):
-                        if call and not spoken.strip() and timings.filler_ms is None:
-                            # the model works before speaking: a pre-recorded waiting phrase, right now
-                            spoken += self.play_filler(conv, tts, speaker, timings, t0)
+                        topic = fillers.TOOL_TOPIC.get(tool_call.name, "general")
+                        if not spoken.strip() and not ack:  # the model works before speaking: a waiting phrase, now
+                            if said := patience.start(topic):
+                                timings.filler_ms = ms_since(t0)
+                                spoken += f"{said} "
+                        patience.topic = topic  # the longer phrases follow what it is doing now
                         await self.send(AgentToolMessage(name=tool_call.name, args=tool_call.arguments))
                     case ToolResultEvent(name=name, ok=ok, ms=ms):
                         step_text = ""
                         await self.send(AgentToolMessage(name=name, ok=ok, ms=ms))
                     case ErrorEvent(message=message):
                         await self.send(VoiceErrorMessage(message=message))
+            if ack:
+                await ack  # short: its end also releases the held words
+            if held:
+                await emit("".join(held))
+            patience.stop()
+            if not first["spoken"]:  # no immediate reply after all: the note about it goes away
+                unnote(working)
+            if first["spoken"]:  # in the history too, so the next turns know it was said
+                say = first["text"].strip()
+                i = next(i for i in range(len(working) - 1, -1, -1) if working[i].role == "user")
+                j = next((k for k in range(i + 1, len(working)) if working[k].role == "assistant"), None)
+                if j is not None:
+                    m = working[j]
+                    working[j] = ChatMessage(role="assistant", content=f"{say} {m.content or ''}".strip(), tool_calls=m.tool_calls)
+            if timings.filler_ms is None and patience.started_at:  # started by the safety net
+                timings.filler_ms = int((patience.started_at - t0) * 1000)
             timings.llm_total_ms = ms_since(llm_start)
             conv.history = trim(working)
             committed = True
@@ -468,18 +551,99 @@ class VoiceConnection:
             # the last sentence's audio): that would duplicate it. trim() closes a tool call cut mid-run.
             if heard and not committed:
                 kept = working if working is not None else [*conv.history, ChatMessage(role="user", content=heard)]
+                if not first.get("spoken"):
+                    unnote(kept)
                 last = kept[-1]
                 if step_text.strip() and not (last.role == "assistant" and last.tool_calls):
                     kept = [*kept, ChatMessage(role="assistant", content=f"{step_text.strip()} …")]
                 conv.history = trim(kept)
+            if ack:
+                ack.cancel()
+            if patience:
+                patience.stop()
             if speaker:
                 await speaker.stop()
             raise
         except Exception as e:
             await self.send(VoiceErrorMessage(message=str(e) or type(e).__name__))
         finally:
+            if patience:
+                patience.stop()
             if utterance:
                 utterance.cancel()  # interrupted while transcribing: close the provider stream
+
+
+def unnote(messages: list[ChatMessage]) -> None:
+    """Remove the "immediate reply already said" note from the last caller message (it was not said after all)."""
+    for k in range(len(messages) - 1, -1, -1):
+        if messages[k].role == "user":
+            if ACK_NOTE in (messages[k].content or ""):
+                messages[k] = ChatMessage(role="user", content=messages[k].content.replace(ACK_NOTE, ""))
+            return
+
+
+class Patience:
+    """Waiting phrases while the agent works: a short one at once (start), then longer ones while it still has not
+    started its answer — each one after the previous has finished playing, never more than len(STEPS) + 1."""
+
+    STEPS = [(1.8, 2), (4.5, 3), (9.0, 3)]  # (seconds after the first phrase, level)
+    GAP_S = 0.5  # silence between two waiting phrases
+    SAFETY_S = 1.2  # nothing said this long after the end of the caller's speech: a waiting phrase anyway
+
+    def __init__(self, say: Callable[[fillers.Clip], None], tts: TTSClient, conv: Conversation):
+        self.say, self.tts, self.conv = say, tts, conv
+        self.topic = "general"
+        self.task: asyncio.Task | None = None
+        self.timer: asyncio.Task | None = None
+        self.stopped = False
+        self.started_at: float | None = None  # when the first waiting phrase was queued
+
+    def arm(self, t0: float, topic: str = "general", delay: float | None = None) -> None:
+        """Safety net: if the agent has said nothing SAFETY_S after t0 (thinking before a tool, slow model), start."""
+
+        async def later() -> None:
+            await asyncio.sleep(max(0.0, t0 + (self.SAFETY_S if delay is None else delay) - time.perf_counter()))
+            self.start(topic)
+
+        self.timer = asyncio.create_task(later())
+
+    def acked(self, seconds: float) -> None:
+        """The agent's own first reply was said (services/ack.py): no short phrase, only the longer ones if the
+        answer is still not there after it."""
+        if self.stopped or self.task:
+            return
+        if self.timer and not self.timer.done():
+            self.timer.cancel()
+        self.task = asyncio.create_task(self._escalate(time.perf_counter(), seconds))
+
+    def start(self, topic: str) -> str:
+        """Play a short phrase about `topic` now and schedule the longer ones. Returns what it said ("" = nothing)."""
+        if self.task or self.stopped:
+            return ""
+        clip = fillers.pick(self.tts, topic, 1, self.conv.recent_fillers)
+        if not clip:
+            return ""
+        self.topic = topic
+        self.say(clip)
+        self.started_at = time.perf_counter()
+        self.task = asyncio.create_task(self._escalate(self.started_at, clip.seconds))
+        return clip.text
+
+    def stop(self) -> None:
+        self.stopped = True
+        for t in (self.task, self.timer):
+            if t and not t.done():
+                t.cancel()
+
+    async def _escalate(self, began: float, playing: float) -> None:
+        free_at = began + playing  # when the previous phrase ends
+        for after, level in self.STEPS:
+            await asyncio.sleep(max(began + after, free_at + self.GAP_S) - time.perf_counter())
+            clip = fillers.pick(self.tts, self.topic, level, self.conv.recent_fillers)
+            if self.stopped or not clip:
+                return
+            self.say(clip)
+            free_at = time.perf_counter() + clip.seconds
 
 
 class Speaker:
@@ -507,6 +671,11 @@ class Speaker:
         if not sentence.strip():
             return
         self._queue(sentence)
+
+    def flush(self) -> None:
+        """Send what is buffered to the TTS now (a reply that ends without a following space)."""
+        self.speak(self.buffer)
+        self.buffer = ""
 
     def play(self, clip: fillers.Clip) -> None:
         """Pre-recorded audio (a waiting phrase), queued like a sentence: no TTS call."""

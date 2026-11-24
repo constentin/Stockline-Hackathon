@@ -69,6 +69,7 @@ class TurnTimings(WireModel):
     action: str | None = Field(None, description="What the code did before the model (confirmed, declined, do_not_call)")
     model: str | None = Field(None, description="The model that answered")
     filler_ms: int | None = Field(None, description="End of caller speech → pre-recorded waiting phrase sent")
+    ack_ms: int | None = Field(None, description="End of caller speech → first word of the agent's immediate reply (small model)")
 
 
 # ── Stream events ──
