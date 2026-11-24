@@ -74,6 +74,23 @@ class TwilioSettings:
 
 
 @dataclass(frozen=True)
+class VoiceTuning:
+    """Hands-free turn-taking (services/listener.py, services/turn_taking.py). VOICE_* in .env."""
+
+    silence_ms: int  # silence that ends a normal sentence
+    hold_ms: int  # silence tolerated when the sentence is clearly unfinished (« je voudrais… euh »)
+    barge_in_words: int  # real words (hesitations not counted) needed to interrupt the agent
+    ignore_backchannel: bool  # « oui », « d'accord », « mmh » while the agent talks: it goes on
+    reprompt_s: float  # caller silent this long after the agent spoke: a short relaunch (0 = never)
+    echo_tail_ms: int  # after the agent's audio stops, its own words heard back still count as echo this long
+    addressee_min: float  # Jev: below this probability the caller was talking to someone else (no answer)
+    callback_auto: bool  # ring the phone by itself when a callback is due (services/callbacks.py)
+    callback_window_min: int  # only callbacks due for less than this are rung by themselves (older: by hand)
+    clarity_min: float  # Jev: below this probability the client's sentence is not understood → ask, don't guess
+    stt_confidence_min: float  # mean word confidence below this → doubtful transcript (ask if Jev is not sure either)
+
+
+@dataclass(frozen=True)
 class Settings:
     port: int
     erp_api_url: str
@@ -83,6 +100,7 @@ class Settings:
     stt: STTSettings
     tts: TTSSettings
     jev: JevSettings  # optional decision model, used next to the LLM (clients/jev.py)
+    voice: VoiceTuning
     twilio: TwilioSettings  # optional: real phone calls (services/phone.py)
 
 
@@ -112,6 +130,19 @@ settings = Settings(
         model=env("TTS_MODEL"),
         voice=env("TTS_VOICE"),
         language=env("TTS_LANGUAGE", "fr"),
+    ),
+    voice=VoiceTuning(
+        silence_ms=int(env("VOICE_SILENCE_MS", "600")),
+        hold_ms=int(env("VOICE_HOLD_MS", "2500")),
+        barge_in_words=int(env("VOICE_BARGE_IN_WORDS", "2")),
+        ignore_backchannel=env("VOICE_IGNORE_BACKCHANNEL", "1") not in ("0", "false", "no"),
+        reprompt_s=float(env("VOICE_REPROMPT_S", "0")),
+        echo_tail_ms=int(env("VOICE_ECHO_TAIL_MS", "800")),
+        addressee_min=float(env("VOICE_ADDRESSEE_MIN", "0.5")),
+        callback_auto=env("VOICE_CALLBACK_AUTO", "1") not in ("0", "false", "no"),
+        callback_window_min=int(env("VOICE_CALLBACK_WINDOW_MIN", "15")),
+        clarity_min=float(env("VOICE_CLARITY_MIN", "0.4")),
+        stt_confidence_min=float(env("VOICE_STT_CONFIDENCE_MIN", "0.6")),
     ),
     jev=JevSettings(
         api_key=env("JEV_API_KEY"),

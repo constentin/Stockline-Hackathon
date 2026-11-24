@@ -45,7 +45,7 @@ export function ProposalPanel({ onClose, onCreated }: { onClose: () => void; onC
       id="campaign-proposal"
       width={720}
       title="Proposition de déstockage"
-      subtitle="Calculée sur le stock, la demande des 8 dernières semaines et le panier des clients"
+      subtitle="Par lot : stock libre, ventes prévues au tarif habituel, part à brader, urgence avant la DLC"
       onClose={onClose}
       actions={<Button size="sm" variant="ghost" icon={RefreshCw} loading={isFetching} onClick={() => void refetch()}>Recalculer</Button>}
       footer={
@@ -66,7 +66,7 @@ export function ProposalPanel({ onClose, onCreated }: { onClose: () => void; onC
         <div className="flex flex-col gap-5 pb-4">
           <StatGrid className="md:grid-cols-4">
             <Stat label="Perte évitable" value={fmtMoney(atRisk)} hint="au coût, sans action" tone="destructive" />
-            <Stat label="Récupérable" value={fmtMoney(recovered)} hint="espéré, HT" tone="success" />
+            <Stat label="Récupérable" value={fmtMoney(recovered)} hint="si les offres sont acceptées, HT" tone="success" />
             <Stat label="Offres" value={offers.length} />
             <Stat label="Clients à appeler" value={data.campaign.targets.length} hint="jusqu'à 4 offres par appel" />
           </StatGrid>
@@ -74,9 +74,12 @@ export function ProposalPanel({ onClose, onCreated }: { onClose: () => void; onC
             <DataTable inset paginate={false} columns={COLUMNS} rows={data.analysis} getRowId={(a) => a.offerId} />
           </Section>
           <p className="px-4 text-[12px] text-muted-foreground">
-            Remise = celle qui maximise l'argent récupéré, en tenant compte des clients qui auraient acheté au prix normal ; la remise max
-            laisse une marge de négociation à l'agent, jamais sous le prix plancher (en dessous, le don rapporte plus). La campagne active
-            précédente sera clôturée.
+            Remise par client : d* = 40 % · λ · (1 + ε<sub>c</sub>) · R · U(J), avec R la part du lot que les ventes normales
+            n'absorberont pas, U(J) = 0,5 + 0,5 / (1 + e<sup>3(J−2)</sup>) l'urgence (J = jours jusqu'à la dernière tournée possible
+            pour ce client avant la DLC), puis plafonnée (campagne, prix plancher) ; prix arrondi au centime. Clients classés par
+            contribution G = f·[q(p − c − A) − k·max(0, p₀ − c − A)] − F : seules les offres où G &gt; 0 sont gardées. λ et ε
+            n'évoluent que par paires d'offres comparées (λ ± 0,05) : tant qu'il n'y a pas assez de résultats, λ = 0,60 et ε = 0.
+            La campagne active précédente sera clôturée.
           </p>
         </div>
       )}
@@ -106,8 +109,23 @@ const COLUMNS: Column<ProposalAnalysis>[] = [
       </span>
     ),
   },
-  { id: "sellBy", header: "À livrer avant", cell: (a) => <DateLabel date={a.sellBy} /> },
-  { id: "discount", header: "Remise", numeric: true, cell: (a) => (a.discountPct != null ? `−${a.discountPct} % (max ${a.maxDiscountPct} %)` : "—") },
+  { id: "sellBy", header: "DLC", cell: (a) => <DateLabel date={a.sellBy} /> },
+  {
+    id: "surplus",
+    header: "À brader",
+    numeric: true,
+    cell: (a) => (
+      <span className="flex flex-col items-end" title={`Stock libre ${fmtQty(a.freeStock ?? 0, a.unit)}, ventes prévues ${fmtQty(a.expectedSales ?? 0, a.unit)}`}>
+        <span>{a.surplusShare != null ? `R ${Math.round(a.surplusShare * 100)} %` : "—"}</span>
+        <span className="text-[11.5px] text-muted-foreground">
+          {a.daysLeft != null ? `J ${a.daysLeft} j · U ${Math.round((a.urgency ?? 0) * 100)} %` : ""}
+        </span>
+      </span>
+    ),
+    hideBelow: 640,
+  },
+  { id: "discount", header: "Remise", numeric: true, cell: (a) => (a.discountPct != null ? `−${a.discountPct} % (max ${a.maxDiscountPct} %)` : "—") },  // median of the clients'
+
   { id: "floor", header: "Plancher", numeric: true, cell: (a) => <Money value={a.floorPrice} />, hideBelow: 640 },
   { id: "targets", header: "Clients", numeric: true, cell: (a) => a.targets },
   {
@@ -115,9 +133,11 @@ const COLUMNS: Column<ProposalAnalysis>[] = [
     header: "Récupéré",
     numeric: true,
     cell: (a) => (a.note ? "—" : (
-      <span className="flex flex-col items-end">
+      <span className="flex flex-col items-end" title="Chiffre d'affaires si les offres sont acceptées ; G = contribution de scénario">
         <Money value={a.expectedRecovered} />
-        <span className="text-[11.5px] text-muted-foreground">{fmtQty(a.expectedCleared, a.unit)}</span>
+        <span className="text-[11.5px] text-muted-foreground">
+          {fmtQty(a.expectedCleared, a.unit)}{a.contribution != null ? ` · G ${fmtMoney(a.contribution)}` : ""}
+        </span>
       </span>
     )),
   },

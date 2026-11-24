@@ -43,7 +43,7 @@ from app.schemas.domain import (
     SupplierEvent,
     SupplierPrice,
     TagDef,
-    Unit,
+    Unit, PastConversation, OfferExperiment,
 )
 
 
@@ -553,6 +553,17 @@ class CallBrief(Schema):
     context: list[str]  # client context entries: "title: body"
     accepted: list[CampaignCallLine] | None = None
     order_id: Id | None = None
+    previous_calls: list[PastConversation] | None = None  # earlier attempts (a callback): what was said, to pick it up
+    now_local: str  # company local time when the brief was read, YYYY-MM-DDTHH:MM (callbacks)
+    now_spoken: str  # the same in words: « mardi 24 novembre, 10 h 42 »
+
+
+class CampaignCallbacks(Schema):
+    """Callbacks of the active campaigns: due now (time passed, offers still open) and coming later."""
+
+    now: str  # company local time, YYYY-MM-DDTHH:MM
+    due: list[CampaignCallView]
+    upcoming: list[CampaignCallView]
 
 
 class CampaignQuote(Schema):
@@ -597,6 +608,7 @@ class ProposalOffer(Schema):
     expires_at: IsoDate
     discount_pct: float
     max_discount_pct: float
+    experiment: OfferExperiment | None = None
 
 
 class ProposalTarget(Schema):
@@ -629,6 +641,13 @@ class ProposalAnalysis(Schema):
     discount_pct: float | None = None
     max_discount_pct: float | None = None
     floor_price: float | None = None  # € / unit: below, donating pays more
+    lot_id: Id | None = None
+    free_stock: float | None = None  # S: the lot minus reservations
+    expected_sales: float | None = None  # N: sold at the usual price before the DLC (FEFO forecast)
+    surplus_share: float | None = None  # R = Q_r / S
+    days_left: int | None = None  # J: the shortest delivery → DLC among the clients called
+    urgency: float | None = None  # U(J)
+    contribution: float | None = None  # Σ G of the offers (scenario score, € — not a measured gain)
     targets: int
     expected_cleared: float
     expected_recovered: float  # € HT
@@ -639,4 +658,4 @@ class ClearanceProposal(Schema):
     campaign: ProposalCampaign
     analysis: list[ProposalAnalysis]
     total_loss_value: float  # € at cost, all products above the threshold
-    params: dict[str, float | int | list[float]]
+    params: dict[str, float | int | list[float]]  # the model's parameters (DECISIONS.md)

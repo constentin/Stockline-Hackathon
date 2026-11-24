@@ -75,6 +75,11 @@ export class SegmentPlayer {
     this.open(URL.createObjectURL(new Blob(this.chunks, { type: this.mime })));
   }
 
+  /** How far the segment has played, in ms (what the listener heard when it is stopped). */
+  get playedMs(): number {
+    return Math.round((this.el?.currentTime ?? 0) * 1000);
+  }
+
   stop() {
     if (this.stopped) return;
     this.el?.pause();

@@ -79,6 +79,14 @@ SCENARIOS = [
              expect_status="accepted", expect_order="confirmed", expect_qty={"off_3": 10}),
     Scenario("oui_a_une_question", ["Les crevettes, 10 kilos.", "Oui c'est bon, mettez-moi aussi 20 kilos de moules.", "Oui, je valide.", "Au revoir."],
              expect_status="accepted", expect_order="confirmed", expect_qty={"off_1": 10, "off_2": 20}),
+    Scenario("incomprehensible", ["Le chat des dés vingt pour la cave.", "Vingt kilos de moules.", "Oui c'est bon.", "Au revoir."],
+             expect_status="accepted", expect_order="confirmed", expect_qty={"off_2": 20},
+             said_any=("pardon", "répéter", "entendu", "compris", "préciser", "redire", "excusez", "saisi")),
+    Scenario("deux_fois_flou", ["Mettez-moi des... comment... les machins.", "Euh ouais le truc là, vous voyez.", "Les bulots, dix kilos.",
+                                "Oui.", "Au revoir."],
+             expect_status="accepted", expect_order="confirmed", expect_qty={"off_3": 10}),
+    Scenario("produit_manquant", ["Mes paiements, 20 kilos.", "Les moules.", "Oui c'est bon.", "Au revoir."],
+             expect_status="accepted", expect_order="confirmed", expect_qty={"off_2": 20}),
     Scenario("ne_plus_appeler", ["Arrêtez de m'appeler pour vos promotions, je ne veux plus être démarché."],
              expect_status="do_not_call", side_effects=True),
 ]  # fmt: skip
@@ -136,12 +144,14 @@ async def play(s: Scenario, erp: ErpClient, router: bool = True) -> Result:
     try:
         call = await start_call(call_id, "Banc de test")
         history = [ChatMessage(role="user", content=OPENING_CUE)]
+        streak, asked = 0, []  # unclear sentences in a row, how the agent asked (like the voice session)
         for line in [None, *s.lines]:
             t0, first, sound, said = time.perf_counter(), None, None, ""
             if line is not None:
                 agent_said = next((m.content for m in reversed(history) if m.role == "assistant" and m.content), "")
                 route = await classify(line, agent_said or "", call.offers) if router else None
-                plan = await plan_turn(call, route, "Banc de test", agent_said or "")
+                plan = await plan_turn(call, route, "Banc de test", agent_said or "", None, streak, asked)
+                streak = streak + 1 if plan.action == "clarify" else 0
                 history.append(ChatMessage(role="user", content=line))
                 r.routes.append(f"{route.intent if route else '-'}/{plan.action or '-'}/{plan.llms[0].model}")
             else:
@@ -167,6 +177,8 @@ async def play(s: Scenario, erp: ErpClient, router: bool = True) -> Result:
                         r.problems.append(f"erreur agent : {m}")
             r.steps += sum(1 for m in history if m.role == "assistant") - before  # one assistant message per model call
             r.agent.append(said.strip())
+            if line is not None and plan.action == "clarify":
+                asked.append(said.strip())
             if first is not None:
                 r.first_token_ms.append(first)
             if sound is not None and line is not None:

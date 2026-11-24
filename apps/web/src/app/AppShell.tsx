@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
+import { CallbackBanner } from "./CallbackBanner";
 import { useActivityStream } from "@/lib/queries";
 import { cn } from "@/lib/cn";
 import { CommandK, PageHeaderSlot, ResizeHandle, Toaster, useResizableWidth } from "@/ui";
@@ -65,6 +66,7 @@ export function AppShell() {
         <PageHeaderSlot trailing={<ShellHeaderTools />} register={registerHeader}>
           <Outlet />
         </PageHeaderSlot>
+        <CallbackBanner />
         {headers === 0 ? (
           <div className="absolute right-5 top-0 z-30 flex h-12 items-center">
             <ShellHeaderTools />

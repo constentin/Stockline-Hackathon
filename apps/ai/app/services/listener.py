@@ -23,11 +23,14 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 
 from app.clients import STTClient
 
+from app.config import settings
+
 from .router import Route, same_words
+from .turn_taking import hesitant_end, only_hesitation
 
 QUIET_S = 0.25  # words unchanged this long: ask Jev if the sentence is finished
-SILENCE_S = 0.6  # unsure: end of turn after this silence
-HOLD_S = 1.6  # sentence cut in the middle: wait this long for the rest
+SILENCE_S = settings.voice.silence_ms / 1000  # unsure: end of turn after this silence (VOICE_SILENCE_MS)
+HOLD_S = settings.voice.hold_ms / 1000  # sentence cut in the middle / only « euh »: wait this long (VOICE_HOLD_MS)
 TICK_S = 0.05
 
 
@@ -41,11 +44,19 @@ class Listener:
         on_turn: Callable[[str, float, Route | None], Awaitable[None]],  # (text, last_word_at, route)
         judge: Callable[[str], Awaitable[Route | None]],  # the Jev router, on the text heard so far
         on_stopped: Callable[[str], Awaitable[None]] | None = None,  # the STT stream failed (reason)
+        on_dropped: Callable[[str], Awaitable[None]] | None = None,  # only hesitation was heard: no turn
     ):
         self.stt, self.on_words, self.on_turn, self.judge, self.on_stopped = stt, on_words, on_turn, judge, on_stopped
+
+        async def nothing(_text: str) -> None:
+            pass
+
+        self.on_dropped = on_dropped or nothing
         self.frames: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.control: asyncio.Queue[str] = asyncio.Queue()
         self.done = ""  # finished sentences of the current turn
+        self.confs: list[tuple[float, int]] = []  # (confidence, length) of those sentences
+        self.turn_confidence: float | None = None  # of the turn just handed to on_turn
         self.current = ""  # the sentence being heard (provisional words included)
         self.changed_at = time.perf_counter()
         self.finalizing = False
@@ -81,6 +92,8 @@ class Listener:
             async for u in self.stt.listen(self._audio(), mime, hint, self.control):
                 if u.final:
                     self.done = f"{self.done} {u.text}".strip()
+                    if u.confidence is not None:
+                        self.confs.append((u.confidence, len(u.text)))
                     self.current, self.finalizing = "", False
                 elif u.text != self.current:
                     self.current = u.text
@@ -117,10 +130,26 @@ class Listener:
             quiet = time.perf_counter() - self.changed_at
             if quiet < QUIET_S:
                 continue
+            if only_hesitation(text):  # « euh… », « hum »: he is thinking, nothing to answer yet
+                if quiet >= HOLD_S and not self.current:
+                    print(f"[ai] hésitation ignorée : « {text} »", flush=True)
+                    self.done, self.judged, self.confs = "", {}, []
+                    await self.on_dropped(text)
+                elif quiet >= HOLD_S and not self.finalizing:
+                    self.finalizing = True
+                    self.control.put_nowait(self.stt.finalize_message())
+                continue
             task = self._route(text)
             route = task.result() if task.done() and not task.cancelled() and not task.exception() else None
             complete = route.complete if route else None
-            wait = QUIET_S if complete is not None and complete >= 0.75 else HOLD_S if complete is not None and complete < 0.3 else SILENCE_S
+            if hesitant_end(text):  # « … et », « … 20 kilos euh »: the rest is coming
+                wait = HOLD_S
+            elif complete is not None and complete >= 0.75:
+                wait = QUIET_S
+            elif complete is not None and complete < 0.3:
+                wait = HOLD_S
+            else:
+                wait = SILENCE_S
             if quiet < wait:
                 continue
             if self.current and not self.finalizing:  # provisional words left: make them final first
@@ -132,7 +161,9 @@ class Listener:
                     continue
                 self.done, self.current = text, ""  # no answer to finalize: take what was heard
             turn, last_word_at = self.done, self.changed_at
-            self.done, self.judged = "", {}
+            weight = sum(n for _, n in self.confs)
+            self.turn_confidence = sum(c * n for c, n in self.confs) / weight if weight else None
+            self.done, self.judged, self.confs = "", {}, []
             print(f"[ai] fin de tour après {int(quiet * 1000)} ms de silence (phrase finie : "
                   f"{'?' if complete is None else round(complete, 2)}, attente prévue {int(wait * 1000)} ms)", flush=True)  # fmt: skip
             await self.on_turn(turn, last_word_at, route if route and same_words(route.text, turn) else None)

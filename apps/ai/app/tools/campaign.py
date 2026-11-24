@@ -86,7 +86,7 @@ def last_exchange(messages: list) -> tuple[str, str]:
     if i is None:
         return "", ""
     agent = next((m.content for m in reversed(messages[:i]) if m.role == "assistant" and m.content), "")
-    return agent or "", messages[i].content or ""
+    return (agent or "").split("\n[Standard")[0], messages[i].content or ""
 
 
 async def client_agreed(messages: list) -> float | None:
@@ -132,12 +132,15 @@ async def record_call_outcome(
         description="accepted = au moins une offre prise ; callback = rappeler plus tard ; do_not_call = ne veut plus être appelé"
     ),
     summary: str = Field(description="Une phrase en français sur l'appel, ex. « Prend 20 kg de moules, rappeler jeudi pour les bulots »"),
-    callback_at: str | None = Field(None, description="Pour callback : quand rappeler, YYYY-MM-DDTHH:MM"),
+    callback_at: str | None = Field(
+        None, description="Pour callback à une heure dite : YYYY-MM-DDTHH:MM, heure locale (« demain 15 h » ; maintenant = nowLocal de la fiche)"
+    ),
+    callback_in_minutes: int | None = Field(None, description="Pour callback dans un délai : « dans 10 minutes » → 10, « dans une heure » → 60"),
 ) -> dict:
     """
     Clôt l'appel sortant sans commande validée (refus, rappel, ne plus appeler, sans réponse) : enregistre le résultat
     dans la campagne et l'historique du client. Inutile après confirm_call_order. Record the call outcome.
     """
-    body = without_none({"status": outcome, "summary": summary, "callbackAt": callback_at})
+    body = without_none({"status": outcome, "summary": summary, "callbackAt": callback_at, "callbackInMinutes": callback_in_minutes})
     res = await ctx.erp.patch(f"/api/campaign-calls/{enc(call_id)}", body)
     return pick(res, "status", "orderNumber", "orderStatus", "callbackAt")

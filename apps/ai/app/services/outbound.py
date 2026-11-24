@@ -14,6 +14,7 @@ from one call to the next, so the prompt cache keeps serving it.
 
 import asyncio
 import json
+import random
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -26,12 +27,73 @@ from app.tools import ErpClient, outbound_tools
 from app.tools.erp import ErpError, enc
 
 from .router import Route
+from app.config import settings
 
 NOTE_SEP = "\n[Standard"  # a switchboard note appended to the client's words (plan_turn)
 OPENING_CUE = "[Standard : appel sortant, le client vient de décrocher. À toi de parler.]"
 HANGUP_CUE = "[Standard : le client a raccroché.]"
 
 OUTCOMES = ("accepted", "declined", "callback", "no_answer", "do_not_call")
+
+# A different way to open each call (start_call picks one, never one of the last two used): the same sentence on
+# every call sounds robotic. The model follows the style in its own words; the constraints (all offers with their
+# price, short, an open question) stay in agent/prompts.py.
+OPENING_STYLES = [
+    "Chaleureuse et directe : salue-le par son prénom, présente-toi, dis que tu as pensé à lui pour quelques produits "
+    "à date courte que tu fais à prix cassé, cite-les avec leur prix, et demande ce qui lui ferait plaisir.",
+    "Une question d'abord : salue-le, présente-toi, demande-lui s'il a deux minutes ou s'il est en plein coup de feu, "
+    "puis enchaîne tout de suite sur les offres et leur prix, et laisse-le choisir.",
+    "Ses habitudes : salue-le, présente-toi, rappelle en quelques mots ce qu'il prend souvent (d'après la fiche), puis "
+    "présente les offres à petit prix et demande ce qui l'intéresse.",
+    "Bonne nouvelle : salue-le, annonce que tu as une bonne affaire pour lui aujourd'hui, présente-toi en passant, cite "
+    "les offres avec leur prix (date courte, donc prix bas) et demande si ça lui dit.",
+    "Complice : salue-le, présente-toi, dis que tu appelles tes meilleurs clients en premier, cite les offres avec leur "
+    "prix et demande ce qu'il en pense.",
+    "Concrète et rapide : salue-le, présente-toi en trois mots, va droit au but avec les offres et leurs prix, précise "
+    "qu'il faut les écouler vite, et demande lesquelles il veut.",
+    "Le service qui vient : salue-le, présente-toi, fais un petit lien avec son service ou son week-end à venir, puis "
+    "présente les offres à petit prix et demande ce qui l'arrangerait.",
+]
+CALLBACK_OPENING = (
+    "C'est un RAPPEL (previousCalls dans la fiche : ce qui s'est dit la dernière fois) : salue-le, dis que tu le "
+    "rappelles comme convenu, résume en une phrase où vous en étiez (par exemple la commande qu'il allait valider, les "
+    "produits qui l'intéressaient) et pose la question qui fait avancer. Ne refais pas la présentation des offres."
+)
+# How the call starts and how the agent introduces itself: drawn too, so the very first words change from call to call
+GREETINGS = [
+    "Bonjour {prenom} !",
+    "Allô, {prenom} ? Bonjour !",
+    "Bonjour {prenom}, comment allez-vous ?",
+    "{prenom}, bonjour !",
+    "Bonjour {prenom}, j'espère que la journée se passe bien.",
+    "Bonjour {prenom}, je ne vous dérange pas trop ?",
+]
+INTRODUCTIONS = [  # + the company, said by the agent (each team has its own)
+    "c'est {agent}",
+    "{agent} à l'appareil",
+    "ici {agent}",
+    "c'est {agent} qui vous appelle",
+    "je suis {agent}",
+]
+_recent_openings: list[int] = []
+_recent_greetings: list[int] = []
+
+
+def pick_opening(brief: dict) -> str:
+    """The way to open this call: a callback picks the conversation up; otherwise a style not used in the last 2 calls."""
+    if brief.get("previousCalls"):
+        return CALLBACK_OPENING
+    choices = [i for i in range(len(OPENING_STYLES)) if i not in _recent_openings] or list(range(len(OPENING_STYLES)))
+    i = random.choice(choices)
+    _recent_openings[:] = [*_recent_openings, i][-2:]
+    g = random.choice([k for k in range(len(GREETINGS)) if k not in _recent_greetings] or list(range(len(GREETINGS))))
+    _recent_greetings[:] = [*_recent_greetings, g][-3:]
+    first = (((brief.get("client") or {}).get("contact") or {}).get("name") or "").split(" ")[0] or "Monsieur"
+    from app.agent.prompts import OUTBOUND_AGENT_NAME
+
+    greeting = GREETINGS[g].format(prenom=first)
+    intro = random.choice(INTRODUCTIONS).format(agent=OUTBOUND_AGENT_NAME)
+    return f"Commence exactement par « {greeting} », présente-toi ainsi : « {intro} » suivi du nom de l'entreprise. Puis : {OPENING_STYLES[i]}"
 
 
 @dataclass
@@ -68,8 +130,9 @@ async def start_call(call_id: str, actor_name: str | None = None) -> OutboundCal
     """Load the brief and mark the call in progress (one more attempt). Raises ErpError if the ERP refuses."""
     erp = ErpClient("voice_agent", actor_name)
     await erp.patch(f"/api/campaign-calls/{enc(call_id)}", {"status": "in_progress"})
-    brief = await erp.get(f"/api/campaign-calls/{enc(call_id)}/brief")
-    return OutboundCall(call_id=call_id, brief=with_spoken_dates(brief))
+    brief = with_spoken_dates(await erp.get(f"/api/campaign-calls/{enc(call_id)}/brief"))
+    brief["openingStyle"] = pick_opening(brief)
+    return OutboundCall(call_id=call_id, brief=brief)
 
 
 def with_spoken_dates(brief: dict) -> dict:
@@ -92,6 +155,8 @@ def transcript(history: list[ChatMessage]) -> str:
         if m.role not in ("user", "assistant") or not m.content or m.content.startswith("[Standard"):
             continue
         said = m.content.split(NOTE_SEP)[0]  # without the switchboard note the router may have added
+        if said.startswith("[") and "]\n" in said:  # « [Avant, le client a dit à quelqu'un près de lui : …] »
+            said = said.split("]\n", 1)[1]
         lines.append(f"{'Client' if m.role == 'user' else 'Agent'} : {said}")
     return "\n".join(lines)
 
@@ -134,10 +199,22 @@ async def guess_outcome(history: list[ChatMessage]) -> tuple[str, str]:
 
 
 async def end_call(call: OutboundCall, history: list[ChatMessage], actor_name: str | None = None) -> str | None:
-    """Called when the caller hangs up. Records an outcome unless the agent already did. Returns the outcome written."""
+    """Called when the caller hangs up. Records an outcome unless the agent already did, then keeps what was said
+    (the brief of a callback gives it back: the agent picks the conversation up). Returns the outcome written."""
+    erp = ErpClient("voice_agent", actor_name)
+    outcome = await _record_outcome(erp, call, history)
+    lines = transcript(history).splitlines()
+    if any(line.startswith("Client") for line in lines):  # the client never spoke (no answer): nothing to pick up
+        try:
+            await erp.post(f"/api/campaign-calls/{enc(call.call_id)}/transcript", {"lines": lines})
+        except ErpError as e:  # the outcome is what matters: a lost transcript only makes a callback less smooth
+            print(f"[ai] conversation non enregistrée ({e})", flush=True)
+    return outcome
+
+
+async def _record_outcome(erp: ErpClient, call: OutboundCall, history: list[ChatMessage]) -> str | None:
     if recorded_outcome(history):
         return None
-    erp = ErpClient("voice_agent", actor_name)
     current = await erp.get(f"/api/campaign-calls/{enc(call.call_id)}")
     if current.get("status") not in ("pending", "in_progress"):
         return None  # already closed (by the router, the agent or the backend): never overwrite an outcome
@@ -155,11 +232,40 @@ SURE = 0.8  # Jev confidence above which the code acts by itself (the bench chec
 HINT = 0.8  # product hint for the big model
 FIRST_EVENT_TIMEOUT_S = 4.0  # no word and no tool call from the model after this: try the other model
 SORRY = "Pardon, la ligne a coupé un instant. Vous pouvez répéter ?"
+# Asking again without sounding like a broken record: what to do on the 1st, 2nd, 3rd unclear sentence in a row.
+CLARIFY_STEPS = [
+    "Ne devine pas. Demande-lui de préciser en UNE phrase courte et naturelle, en reprenant ce que tu as compris s'il y "
+    "a quelque chose (un produit, une quantité : « Vingt kilos de quoi, pardon ? »), sinon demande-lui simplement de "
+    "répéter (« Pardon, je vous ai mal entendu. »).",
+    "C'est la deuxième fois que tu ne comprends pas. Ne redemande pas de répéter de la même façon : propose-lui un "
+    "choix simple qu'il peut trancher en un mot (« Plutôt les moules ou les crevettes ? », « Dix ou vingt kilos ? ») "
+    "ou de dire juste le produit et la quantité.",
+    "Toujours pas compris : la ligne est sans doute mauvaise. Dis-le simplement, sans t'excuser trois fois, et "
+    "propose de le rappeler dans quelques minutes (s'il accepte : record_call_outcome callback dans 10 minutes).",
+]
+
+
+def clarify_note(route: Route, call: "OutboundCall", streak: int, avoid: list[str]) -> str:
+    """The switchboard note of a clarification turn: what was understood, how to ask, what not to say again."""
+    understood = []
+    if route.offer and route.offer_confidence >= 0.6:
+        understood.append(next((o["name"] for o in call.offers if o["offerId"] == route.offer), route.offer))
+    numbers = re.findall(r"\b\d+(?:[,.]\d+)?\b", route.text)
+    if numbers:
+        understood.append(f"le nombre {numbers[0]}")
+    step = CLARIFY_STEPS[min(streak, len(CLARIFY_STEPS)) - 1]
+    said = f" Tu as compris : {', '.join(understood)}." if understood else ""
+    no_repeat = f" Ne reprends aucune de ces formulations déjà dites : {' / '.join(f'« {a} »' for a in avoid[-3:])}." if avoid else ""
+    return f"{NOTE_SEP} : phrase du client mal comprise (transcription : « {route.text} »).{said} {step}{no_repeat}]"
+
+
 DONE_LINES = {  # said by code when the model returns nothing after an action the code did (rare, but never silence)
-    "confirmed": "C'est validé, livraison {day}. Merci et bonne journée !",
-    "declined": "Très bien, merci pour votre temps. Bonne journée !",
-    "do_not_call": "Pardon pour le dérangement, vous ne serez plus appelé. Bonne journée !",
-    "goodbye": "Au revoir, bonne journée !",
+    "confirmed": ["C'est validé, livraison {day}. Merci et bonne journée !", "Parfait, c'est enregistré pour {day}. Belle journée !",
+                  "C'est noté, vous serez livré {day}. Merci beaucoup !"],
+    "declined": ["Très bien, merci pour votre temps. Bonne journée !", "Pas de problème, merci et bonne journée !"],
+    "do_not_call": ["Pardon pour le dérangement, vous ne serez plus appelé. Bonne journée !"],
+    "goodbye": ["Au revoir, bonne journée !", "Au revoir, et bon service !"],
+    "clarify": ["Pardon, je vous ai mal entendu : vous pouvez répéter ?", "Excusez-moi, la ligne a coupé : vous disiez ?"],
 }
 
 
@@ -180,10 +286,22 @@ class Plan:
 RECAP_QUESTION = re.compile(r"\b(valide|validez|confirme|confirmez|c'est bon pour vous|je lance la commande)\b", re.I)
 
 
-async def plan_turn(call: OutboundCall, route: Route | None, actor_name: str | None = None, agent_said: str = "") -> Plan:
+def unclear(route: Route | None, stt_confidence: float | None) -> bool:
+    """Not understood: Jev finds the sentence unclear, or the transcript is doubtful and Jev is not sure either."""
+    if route is None:
+        return False
+    if route.clear < settings.voice.clarity_min:
+        return True
+    return stt_confidence is not None and stt_confidence < settings.voice.stt_confidence_min and route.clear < 0.7
+
+
+async def plan_turn(call: OutboundCall, route: Route | None, actor_name: str | None = None, agent_said: str = "",
+                    stt_confidence: float | None = None, clarify_streak: int = 0, clarify_avoid: list[str] | None = None) -> Plan:  # fmt: skip
     """What to do with this turn, from Jev's reading of the client's words. Never raises: on any doubt or ERP error,
     the big model takes the turn with nothing done in advance. `agent_said`: the agent's previous reply — a "oui"
     confirms the order by code only if that reply asked to validate a recap (not "je vous ajoute des bulots ?")."""
+    if unclear(route, stt_confidence):  # ask, don't guess: the small model phrases a short, varied question
+        return Plan(True, clarify_note(route, call, clarify_streak + 1, clarify_avoid or []), "clarify")
     if route is None or route.confidence < 0.6:
         return Plan(fast=False)
     erp = ErpClient("voice_agent", actor_name)
@@ -258,7 +376,7 @@ async def run_outbound(
             await gen.aclose()
         if not retry:
             if plan.action and not said:  # the code acted but the model said nothing: never leave the client in silence
-                text = DONE_LINES.get(plan.action, DONE_LINES["goodbye"]).format(day=call.brief.get("deliveryOn") or "demain")
+                text = random.choice(DONE_LINES.get(plan.action, DONE_LINES["goodbye"])).format(day=call.brief.get("deliveryOn") or "demain")
                 last = working[-1] if working else None
                 if last and last.role == "assistant" and not last.tool_calls:
                     working[-1] = ChatMessage(role="assistant", content=text)

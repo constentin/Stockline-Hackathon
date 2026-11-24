@@ -69,7 +69,7 @@ export type VoiceClientMessage =
   // hands-free (only when ready.handsFree): binary frames stream continuously, the server detects the ends of sentences
   | { type: "listen_start"; mime: string }
   | { type: "listen_stop" }
-  | { type: "playback"; playing: boolean }; // the agent's audio starts / stops playing (echo, barge-in)
+  | { type: "playback"; playing: boolean; playedMs?: number }; // the agent's audio starts / stops playing; playedMs = how far, when the caller cut it
 
 export interface TurnTimings {
   sttMs?: number;
@@ -92,6 +92,7 @@ export type TurnTimingMs = { [K in keyof TurnTimings]-?: NonNullable<TurnTimings
 export type VoiceServerMessage =
   | { type: "ready"; sessionId: string; stt: string; tts: string; llm: string; handsFree?: boolean }
   | { type: "caller_speaking" } // hands-free: the caller started a sentence (the agent was stopped if it was talking)
+  | { type: "agent_cut"; unheard: string } // the caller cut the agent: what he did not hear of its last reply
   | { type: "listen_stopped"; reason: string } // hands-free stream failed server-side: restart it (new recording) or use Space
   // While the caller speaks (streaming STT): final=false, the whole text heard so far, resent as words are recognised;
   // `stable` = its leading part made of final words (won't change). Then once final=true: what the agent answers.

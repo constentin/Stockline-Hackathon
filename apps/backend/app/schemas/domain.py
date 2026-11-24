@@ -554,6 +554,17 @@ CampaignStatus = Literal["active", "closed"]
 CampaignCallStatus = Literal["pending", "skipped", "in_progress", "accepted", "declined", "callback", "no_answer", "do_not_call"]
 
 
+class OfferExperiment(Schema):
+    """λ / ε learning: this offer is one arm of a randomised pair (services/clearance.py)."""
+
+    kind: Literal["lambda", "eps"]
+    pair: str  # "p3": the two offers of the pair share it
+    arm: Literal["low", "high"]
+    value: float  # λ or ε used for this offer
+    risk_share: float  # R of the lot when offered (to compute the contribution afterwards)
+    usual_price: float  # p₀: the client's price before discount
+
+
 class CampaignOffer(Schema):
     """One short-dated lot (or part of it) offered at a discount."""
 
@@ -564,6 +575,7 @@ class CampaignOffer(Schema):
     expires_at: IsoDate
     discount_pct: float  # opening discount on the client's usual price
     max_discount_pct: float  # never go beyond (enforced by the backend)
+    experiment: OfferExperiment | None = None  # the model's randomised comparison this offer belongs to
 
 
 class Campaign(Schema):
@@ -586,6 +598,15 @@ class CampaignCallLine(Schema):
     line_id: Id | None = None  # the order line (a new "yes" on the same offer updates it)
 
 
+class PastConversation(Schema):
+    """What was said in one earlier attempt of the call (kept so a callback picks the conversation up)."""
+
+    at: str  # company local time when the call ended, YYYY-MM-DDTHH:MM
+    status: str  # the call status then (callback, no_answer…)
+    summary: str | None = None
+    lines: list[str]  # « Client : … » / « Agent : … », the last ones
+
+
 class CampaignCall(Schema):
     """One outbound call: a client + the offers to propose, and how it went."""
 
@@ -606,3 +627,4 @@ class CampaignCall(Schema):
     attempts: int
     started_at: IsoDateTime | None = None
     ended_at: IsoDateTime | None = None
+    conversations: list[PastConversation] | None = None  # earlier attempts, newest last (max 3)

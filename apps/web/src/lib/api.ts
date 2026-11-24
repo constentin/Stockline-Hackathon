@@ -21,7 +21,7 @@ import type { Receivables } from "@kit/shared";
 import type { Category } from "@kit/shared";
 import type { ContextEntry, ContextEntryInput, ContextEntrySummary, ContextForEntity, ContextScope } from "@kit/shared";
 import type { ListParams, Page } from "@kit/shared";
-import type { CampaignCallStatus, CampaignCallView, CampaignDetail, CampaignImportInput, CampaignStatus, CampaignSummary, ClearanceProposal, NextCall } from "@kit/shared";
+import type { CampaignCallStatus, CampaignCallView, CampaignCallbacks, CampaignDetail, CampaignImportInput, CampaignStatus, CampaignSummary, ClearanceProposal, NextCall } from "@kit/shared";
 import { toast } from "@/ui/toast";
 
 export const API_BASE = "/api";
@@ -273,6 +273,8 @@ export const api = {
     update: (id: Id, body: { name?: string; status?: CampaignStatus }) => patch<CampaignDetail>(`/campaigns/${id}`, body),
     nextCall: (id: Id) => get<NextCall>(`/campaigns/${id}/next-call`),
     call: (id: Id) => get<CampaignCallView>(`/campaign-calls/${id}`),
+    /** Callbacks due now / upcoming (« rappelez-moi à 15 h »). */
+    callbacks: () => get<CampaignCallbacks>("/campaign-calls/callbacks"),
     updateCall: (id: Id, body: { status?: CampaignCallStatus; summary?: string; callbackAt?: string }) =>
       patch<CampaignCallView>(`/campaign-calls/${id}`, body),
   },

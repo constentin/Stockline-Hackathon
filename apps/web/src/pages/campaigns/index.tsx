@@ -9,8 +9,8 @@ import { Archive, Calculator, PhoneCall, PhoneOutgoing, Upload } from "lucide-re
 import { ProposalPanel } from "./proposal";
 import type { CampaignCallView, CampaignImportInput, CampaignOfferView } from "@kit/shared";
 import { api } from "@/lib/api";
-import { fmtMoney, fmtQty } from "@/lib/format";
-import { qk, useApiMutation, useCampaign, useCampaigns } from "@/lib/queries";
+import { fmtDateTime, fmtMoney, fmtQty } from "@/lib/format";
+import { qk, useApiMutation, useCallbacks, useCampaign, useCampaigns } from "@/lib/queries";
 import { useUrlState } from "@/lib/url-state";
 import {
   Button, DataTable, DateLabel, EmptyState, Field, Mono, Money, Page, PageBody, PageHeader, Qty, Section, Select, SidePanel, Stat,
@@ -102,6 +102,7 @@ export default function CampaignsPage() {
             <Section title="Offres" count={campaign.offers.length}>
               <DataTable inset paginate={false} columns={OFFER_COLUMNS} rows={campaign.offers} getRowId={(o) => o.id} onRowClick={(o) => nav(`/products/${o.productId}`)} />
             </Section>
+            <ScheduledCallbacks campaignId={campaign.id} />
             <Section title="Appels" count={campaign.calls.length}>
               <DataTable
                 inset
@@ -217,5 +218,47 @@ function ImportPanel({ onClose, onDone }: { onClose: () => void; onDone: (id: st
         </Field>
       </div>
     </SidePanel>
+  );
+}
+
+
+/** « Rappels programmés »: the clients who asked to be called back, and when (the agent rings them at that time). */
+function ScheduledCallbacks({ campaignId }: { campaignId: string }) {
+  const nav = useNavigate();
+  const { data } = useCallbacks();
+  const rows = [...(data?.due ?? []).map((c) => ({ ...c, due: true })), ...(data?.upcoming ?? []).map((c) => ({ ...c, due: false }))]
+    .filter((c) => c.campaignId === campaignId);
+  if (!rows.length) return null;
+  return (
+    <Section title="Rappels programmés" count={rows.length}>
+      <DataTable
+        inset
+        paginate={false}
+        rows={rows}
+        getRowId={(c) => c.id}
+        columns={[
+          { id: "client", header: "Client", cell: (c) => c.clientName },
+          {
+            id: "at",
+            header: "Rappel",
+            cell: (c) => (
+              <span className={c.due ? "font-medium text-violet" : undefined}>
+                {fmtDateTime(c.callbackAt)}{c.due ? " · maintenant" : ""}
+              </span>
+            ),
+          },
+          { id: "summary", header: "Note", cell: (c) => <span className="text-muted-foreground">{c.summary ?? "—"}</span> },
+          {
+            id: "go",
+            header: "",
+            cell: (c) => (
+              <Button size="sm" variant={c.due ? "primary" : "default"} icon={PhoneOutgoing} onClick={() => nav(`/voice?call=${c.id}`)}>
+                Appeler
+              </Button>
+            ),
+          },
+        ]}
+      />
+    </Section>
   );
 }
