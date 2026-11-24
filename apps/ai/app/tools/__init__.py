@@ -19,10 +19,10 @@ from .registry import TOOLS, Tool, ToolContext, tool
 
 # Outbound clearance calls: fewer tools = a shorter prompt, a faster first word and less hesitation.
 OUTBOUND_TOOL_NAMES = (
-    "get_call_brief", "quote_offer", "accept_offer", "record_call_outcome",
-    "confirm_order", "get_order", "save_context", "log_client_event",
+    "get_call_brief", "quote_offer", "accept_offer", "confirm_call_order", "record_call_outcome",
+    "get_order", "save_context", "log_client_event",
 )  # fmt: skip
-CAMPAIGN_TOOL_NAMES = ("get_call_brief", "quote_offer", "accept_offer", "record_call_outcome")
+CAMPAIGN_TOOL_NAMES = ("get_call_brief", "quote_offer", "accept_offer", "confirm_call_order", "record_call_outcome")
 
 
 def all_tools() -> list[Tool]:

@@ -68,7 +68,7 @@ export function ProposalPanel({ onClose, onCreated }: { onClose: () => void; onC
             <Stat label="Perte évitable" value={fmtMoney(atRisk)} hint="au coût, sans action" tone="destructive" />
             <Stat label="Récupérable" value={fmtMoney(recovered)} hint="espéré, HT" tone="success" />
             <Stat label="Offres" value={offers.length} />
-            <Stat label="Clients à appeler" value={data.campaign.targets.length} hint="3 offres max par appel" />
+            <Stat label="Clients à appeler" value={data.campaign.targets.length} hint="jusqu'à 4 offres par appel" />
           </StatGrid>
           <Section title="Offres" count={data.analysis.length} className="px-4">
             <DataTable inset paginate={false} columns={COLUMNS} rows={data.analysis} getRowId={(a) => a.offerId} />

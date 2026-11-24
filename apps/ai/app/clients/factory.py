@@ -5,6 +5,7 @@ To add a provider: write a class implementing LLMClient / STTClient / TTSClient 
 in a new file, then add a `case` below.
 """
 
+from dataclasses import replace
 from functools import cache
 
 from app.config import JevSettings, LLMSettings, STTSettings, TTSSettings, settings
@@ -22,6 +23,8 @@ from .openai import OpenAILLM, OpenAISTT, OpenAITTS
 from .soniox import SonioxSTT
 
 DEFAULT_MODELS = {"openai": "gpt-4.1-mini", "anthropic": "claude-sonnet-5-5", "gemini": "gemini-2.5-flash"}
+# LLM_FAST_MODEL default: the small model of the same provider (outbound calls route the simple turns to it)
+DEFAULT_FAST_MODELS = {"openai": "gpt-4.1-mini", "anthropic": "claude-haiku-5-5", "gemini": "gemini-2.5-flash"}
 # Speech defaults, all fine for French. STT_MODEL / TTS_MODEL / TTS_VOICE override them.
 DEFAULT_STT_MODELS = {"openai": "gpt-4o-mini-transcribe", "deepgram": "nova-3", "soniox": "stt-rt-v6", "gradium": "default"}
 DEFAULT_TTS = {  # provider → (model, voice)
@@ -94,6 +97,18 @@ def make_tts_client(cfg: TTSSettings) -> TTSClient:
     raise ConfigError(f'Unknown TTS_PROVIDER "{cfg.provider}" (elevenlabs | gradium | openai | mock)')
 
 
+def make_phone_tts_client(cfg: TTSSettings) -> TTSClient:
+    """The same voice, but in telephone audio (µ-law 8 kHz) for Twilio calls (services/phone.py)."""
+    model, voice = DEFAULT_TTS.get(cfg.provider, ("", ""))
+    model, voice = cfg.model or model, cfg.voice or voice
+    match cfg.provider:
+        case "elevenlabs":
+            return ElevenLabsTTS(need("TTS_API_KEY", cfg.api_key), model, voice, cfg.language, phone=True)
+        case "gradium":
+            return GradiumTTS(need("TTS_API_KEY", cfg.api_key), model, voice, phone=True)
+    raise ConfigError(f'Phone calls need TTS_PROVIDER=elevenlabs or gradium (now "{cfg.provider}")')
+
+
 def make_jev_client(cfg: JevSettings) -> JevClient | None:
     """Jev is optional: no JEV_API_KEY → None (agent code checks `if jev:`)."""
     return JevClient(cfg.api_key, cfg.model, cfg.base_url) if cfg.api_key else None
@@ -106,6 +121,17 @@ def get_llm_client() -> LLMClient:
 
 
 @cache
+def get_fast_llm_client() -> LLMClient:
+    """The small, fast model of the same provider (LLM_FAST_MODEL), for the simple turns of an outbound call.
+    Same as get_llm_client() when there is no smaller model (mock, openai-compatible without LLM_FAST_MODEL)."""
+    cfg = settings.llm
+    fast = cfg.fast_model or DEFAULT_FAST_MODELS.get(cfg.provider, "")
+    if not fast or cfg.provider == "mock" or fast == (cfg.model or DEFAULT_MODELS.get(cfg.provider)):
+        return get_llm_client()
+    return make_llm_client(replace(cfg, model=fast))
+
+
+@cache
 def get_stt_client() -> STTClient:
     return make_stt_client(settings.stt)
 
@@ -113,6 +139,12 @@ def get_stt_client() -> STTClient:
 @cache
 def get_tts_client() -> TTSClient:
     return make_tts_client(settings.tts)
+
+
+@cache
+def get_phone_tts_client() -> TTSClient:
+    """The TTS in telephone audio (µ-law 8 kHz), for Twilio calls. Raises ConfigError for openai / mock."""
+    return make_phone_tts_client(settings.tts)
 
 
 @cache

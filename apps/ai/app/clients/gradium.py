@@ -6,6 +6,7 @@ TTS  POST https://api.gradium.ai/api/speech/tts  {text, voice_id, output_format,
      Gradium has no mp3 output (wav / pcm / ogg-opus), and the web player streams mp3, so we ask for raw PCM
      (48 kHz, 16-bit mono) and encode it to mp3 chunk by chunk: the first audio still leaves after ~one chunk.
      The voice sets the language: pick a French voice (default Armand, a flagship fr-FR voice).
+     Phone variant (phone=True): the same PCM is resampled to 8 kHz µ-law for Twilio (audio.py PcmToMulaw).
 
 STT  POST https://api.gradium.ai/api/speech/asr?json_config={"language": "fr", …}  raw audio body
      → NDJSON: {"type": "text", "text": "…"} per segment, {"type": "end_text"}, maybe {"type": "error"}.
@@ -21,8 +22,8 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from .audio import AudioFormatError, Mp3Encoder, webm_to_ogg
-from .base import STTClient, TTSClient, TTSResult
+from .audio import AudioFormatError, Mp3Encoder, PcmToMulaw, webm_to_ogg
+from .base import PHONE_MIME, STTClient, TTSClient, TTSResult
 from .http import check_ok, http_client, post_stream, provider_error
 
 BASE = "https://api.gradium.ai/api"
@@ -32,8 +33,10 @@ PCM_RATE = 48000  # output_format "pcm" = 48 kHz, 16-bit signed little-endian mo
 class GradiumTTS(TTSClient):
     name = "gradium"
 
-    def __init__(self, api_key: str, model: str = "default", voice: str = "F7Iib4MAyHIRed0x", http: httpx.AsyncClient | None = None):
-        self.api_key, self.model, self.voice, self.http = api_key, model, voice, http
+    def __init__(
+        self, api_key: str, model: str = "default", voice: str = "F7Iib4MAyHIRed0x", http: httpx.AsyncClient | None = None, phone: bool = False
+    ):
+        self.api_key, self.model, self.voice, self.http, self.phone = api_key, model, voice, http, phone
 
     def build_body(self, text: str, voice: str | None) -> dict:
         return {"text": text, "voice_id": voice or self.voice, "model_name": self.model, "output_format": "pcm", "only_audio": False}
@@ -46,12 +49,14 @@ class GradiumTTS(TTSClient):
             headers={"x-api-key": self.api_key},
             json=self.build_body(text, voice),
         )
+        if self.phone:
+            return TTSResult(PHONE_MIME, mp3_chunks(res, PcmToMulaw(PCM_RATE)))
         return TTSResult("audio/mpeg", mp3_chunks(res))
 
 
-async def mp3_chunks(res: httpx.Response) -> AsyncIterator[bytes]:
-    """Gradium's NDJSON audio messages (base64 PCM) → mp3 bytes as they arrive."""
-    mp3 = Mp3Encoder(PCM_RATE)
+async def mp3_chunks(res: httpx.Response, encoder: "Mp3Encoder | PcmToMulaw | None" = None) -> AsyncIterator[bytes]:
+    """Gradium's NDJSON audio messages (base64 PCM) → mp3 bytes (or µ-law for the phone) as they arrive."""
+    mp3 = encoder or Mp3Encoder(PCM_RATE)
     try:
         async for line in res.aiter_lines():
             if not line.strip():

@@ -8,6 +8,7 @@ The three interfaces every provider implements. The rest of the service only kno
 Interrupting (barge-in, client disconnected) is plain asyncio cancellation: no abort signal to pass around.
 """
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ class LLMRequest:
     messages: list[ChatMessage]  # user / assistant (with tool_calls) / tool (with tool_call_id + name)
     tools: list[ToolInfo] = field(default_factory=list)
     max_tokens: int | None = None
+    speak_only: bool = False  # tools stay declared (the history has tool calls) but the model may not call any
 
 
 @dataclass
@@ -95,6 +97,22 @@ class STTClient(ABC):
         text = await self.transcribe(b"".join([chunk async for chunk in audio]), mime, hint)
         yield STTUpdate(text, final=True, stable=text)
 
+    # True when listen() is implemented: hands-free mode (one stream for the whole call, ends of sentences detected).
+    listens: bool = False
+
+    async def listen(
+        self, audio: AsyncIterator[bytes], mime: str, hint: str | None, control: "asyncio.Queue[str]"
+    ) -> AsyncIterator[STTUpdate]:
+        """Hands-free: ONE stream for a whole call. Yields the current sentence (text since the last end of
+        sentence) as it is heard, then final=True once per sentence: at a pause the provider detects, or after
+        finalize() was put on `control` (provider-specific control message). See services/listener.py."""
+        raise NotImplementedError(f"{self.name}: no hands-free mode (use push-to-talk)")
+        yield  # pragma: no cover  (makes this an async generator)
+
+    def finalize_message(self) -> str:
+        """The control message that makes the provider finalize the words heard so far (listen())."""
+        raise NotImplementedError
+
 
 @dataclass
 class TTSResult:
@@ -102,8 +120,13 @@ class TTSResult:
     chunks: AsyncIterator[bytes]  # bytes as they arrive (first byte early = low latency)
 
 
+PHONE_MIME = "audio/x-mulaw"  # telephone audio (Twilio): raw µ-law, 8 kHz, mono
+
+
 class TTSClient(ABC):
     name: str
+    # True for the phone variant of a provider (clients/factory.py get_phone_tts_client): audio in PHONE_MIME
+    phone: bool = False
 
     @abstractmethod
     async def synthesize(self, text: str, voice: str | None = None) -> TTSResult:

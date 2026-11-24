@@ -21,3 +21,7 @@ apps/*/data/
 data/seed/
 
 .DS_Store
+
+# local benches (python -m app.eval_tts / app.eval_outbound)
+tts-bench/
+eval-outbound.jsonl

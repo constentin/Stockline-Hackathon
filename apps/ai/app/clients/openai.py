@@ -44,6 +44,8 @@ class OpenAILLM(LLMClient):
                 {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
                 for t in req.tools
             ]
+            if req.speak_only:
+                body["tool_choice"] = "none"
         if req.max_tokens:
             body["max_tokens"] = req.max_tokens
         if self.include_usage:

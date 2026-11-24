@@ -467,3 +467,22 @@ def update_call(ctx: Ctx, call_id: str, patch: Doc) -> Doc:
     summary = f" — {patch['summary']}" if patch.get("summary") else ""
     log_event(ctx, "campaign.call_updated", "campaign", campaign["id"], f"Appel {client['name']} : {STATUS_FR[status]}{summary}")
     return call_view(updated, campaign)
+
+
+@transactional
+def confirm_call(ctx: Ctx, call_id: str, summary: str | None = None) -> Doc:
+    """The client agreed to the recap: confirm the call's draft order AND close the call as accepted, in one step
+    (one model round trip less on the slowest turn of the call). Calling it again on a confirmed order is harmless."""
+    call = crud.campaign_calls.require(call_id)
+    order = crud.orders.get(call["orderId"]) if call.get("orderId") else None
+    if not order or order["status"] == "cancelled" or not _live_lines(call):
+        raise conflict("nothing_accepted", "Aucune offre acceptée sur cet appel : passer d'abord par accept_offer")
+    if order["status"] == "draft":
+        orders.confirm_order(ctx, order["id"])
+    if call["status"] in OPEN:
+        auto = ", ".join(
+            f"{fr_num(a['qty'])} × {crud.products.require(a['productId'])['name']} à −{js_str(a['discountPct'])} %" for a in _live_lines(call)
+        )
+        update_call(ctx, call_id, {"status": "accepted", "summary": summary or f"Commande {order['number']} confirmée : {auto}"})
+    updated = crud.campaign_calls.require(call_id)
+    return {"call": call_view(updated), "order": orders.order_detail(order["id"])}

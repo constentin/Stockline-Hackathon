@@ -62,6 +62,13 @@ class TurnTimings(WireModel):
     llm_total_ms: int | None = None
     tts_first_byte_ms: int | None = None
     total_ms: int | None = Field(None, description="End of caller speech → first agent audio byte")
+    # outbound calls
+    endpoint_ms: int | None = Field(None, description="Hands-free: last word heard → end of turn decided (included in total)")
+    route_ms: int | None = Field(None, description="Jev routing time left to wait at the start of the turn (0 = ready in advance)")
+    intent: str | None = Field(None, description="What Jev understood (valide, refuse, negocie…)")
+    action: str | None = Field(None, description="What the code did before the model (confirmed, declined, do_not_call)")
+    model: str | None = Field(None, description="The model that answered")
+    filler_ms: int | None = Field(None, description="End of caller speech → pre-recorded waiting phrase sent")
 
 
 # ── Stream events ──

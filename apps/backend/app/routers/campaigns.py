@@ -77,6 +77,12 @@ async def accept_offer(id: str, body: CampaignAcceptInput, ctx: CtxDep):
     return campaigns.accept_offer(ctx, id, body.data())
 
 
+@calls.post("/{id}/confirm", response_model=CampaignAcceptResult)
+async def confirm_call(id: str, ctx: CtxDep):
+    """The client agreed to the recap: confirms the call's order and records the call as accepted, in one step."""
+    return campaigns.confirm_call(ctx, id)
+
+
 @calls.patch("/{id}", response_model=CampaignCallView)
 async def update_call(id: str, body: CampaignCallPatch, ctx: CtxDep):
     """status in_progress (call starts) or an outcome (call ends: logged in the client's history), summary, callbackAt."""

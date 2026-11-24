@@ -48,15 +48,16 @@ async def run_agent(
     actor_name: str | None = None,
     max_steps: int | None = None,
     system_extra: str | None = None,  # appended at the very end of the system prompt (the outbound call brief)
+    speak_only: bool = False,  # the model may not call tools this turn (the code already did the action)
 ) -> AsyncIterator[ChatStreamEvent]:
     started = time.perf_counter()
     actor = "ai_chat" if mode == "chat" else "voice_agent"
-    ctx = ToolContext(erp=ErpClient(actor, actor_name), actor=actor)
+    ctx = ToolContext(erp=ErpClient(actor, actor_name), actor=actor, messages=messages)
     usage = Usage(input_tokens=0, output_tokens=0)
 
     try:
         system = await build_system_prompt(mode, actor_name, **({"extra": system_extra} if system_extra else {}))
-        request = LLMRequest(system=system, messages=messages, tools=[t.info for t in tools])
+        request = LLMRequest(system=system, messages=messages, tools=[t.info for t in tools], speak_only=speak_only)
         said_something = False
 
         for _step in range(max_steps or settings.max_steps):

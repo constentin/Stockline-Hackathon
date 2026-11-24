@@ -11,8 +11,28 @@ Provider clients: LLM, speech-to-text, text-to-speech. Raw HTTP (httpx), no vend
     mock_llm.py   offline French fake that calls real tools     mock_speech.py  offline STT / TTS
 """
 
-from .base import LLMClient, LLMEvent, LLMRequest, LLMText, LLMToolCall, LLMUsage, STTClient, STTUpdate, TTSClient, TTSResult
-from .factory import ConfigError, get_jev_client, get_llm_client, get_stt_client, get_tts_client
+from .base import (
+    PHONE_MIME,
+    LLMClient,
+    LLMEvent,
+    LLMRequest,
+    LLMText,
+    LLMToolCall,
+    LLMUsage,
+    STTClient,
+    STTUpdate,
+    TTSClient,
+    TTSResult,
+)
+from .factory import (
+    ConfigError,
+    get_fast_llm_client,
+    get_jev_client,
+    get_llm_client,
+    get_phone_tts_client,
+    get_stt_client,
+    get_tts_client,
+)
 from .jev import JevClient
 
 __all__ = [name for name in dir() if not name.startswith("_")]

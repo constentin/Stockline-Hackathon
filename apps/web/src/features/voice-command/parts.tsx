@@ -1,7 +1,7 @@
 /** Small pieces shared by the HUD and the Voix page "Commande" mode: level meter, entity links, latency chips. */
 import { Link } from "react-router-dom";
 import { ArrowUpRight } from "lucide-react";
-import type { TurnTimings } from "@kit/shared";
+import type { TurnTimingMs } from "@kit/shared";
 import { cn } from "@/lib/cn";
 import { toolLinks, type EntityLink } from "@/features/assistant/tools";
 import type { CommandRun } from "./engine";
@@ -61,7 +61,7 @@ export function RunLinks({ r, onNavigate, className }: { r: CommandRun; onNaviga
 export const fmtMs = (ms: number) =>
   ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toLocaleString("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} s`;
 
-export type MetricKey = keyof TurnTimings | "perceivedMs";
+export type MetricKey = TurnTimingMs | "perceivedMs";
 export const COMMAND_METRICS: { key: MetricKey; label: string; title: string }[] = [
   { key: "sttMs", label: "STT", title: "Transcription de la commande" },
   { key: "llmFirstTokenMs", label: "LLM 1er", title: "Premier token du modèle (après les outils éventuels)" },

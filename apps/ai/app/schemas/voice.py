@@ -57,8 +57,30 @@ class HangupMessage(WireModel):
     type: Literal["hangup"] = "hangup"
 
 
+class ListenStartMessage(WireModel):
+    """Hands-free mode on: binary frames now stream continuously; the server decides when the caller has finished
+    (services/listener.py) and when he interrupts the agent. Only when `ready.handsFree` is true."""
+
+    type: Literal["listen_start"] = "listen_start"
+    mime: str = "audio/webm"
+
+
+class ListenStopMessage(WireModel):
+    type: Literal["listen_stop"] = "listen_stop"
+
+
+class PlaybackMessage(WireModel):
+    """The browser starts / stops playing the agent's audio (hands-free: echo and barge-in decisions)."""
+
+    type: Literal["playback"] = "playback"
+    playing: bool
+
+
 VoiceClientMessage = Annotated[
-    Union[StartMessage, AudioStartMessage, AudioEndMessage, TextMessage, ResetMessage, HangupMessage],
+    Union[
+        StartMessage, AudioStartMessage, AudioEndMessage, TextMessage, ResetMessage, HangupMessage,
+        ListenStartMessage, ListenStopMessage, PlaybackMessage,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -71,6 +93,7 @@ class ReadyMessage(WireModel):
     stt: str
     tts: str
     llm: str
+    hands_free: bool = False  # the STT supports listen_start (continuous listening)
 
 
 class TranscriptMessage(WireModel):
@@ -83,6 +106,21 @@ class TranscriptMessage(WireModel):
     text: str
     final: bool
     stable: str | None = None
+
+
+class CallerSpeakingMessage(WireModel):
+    """Hands-free: the caller started a new sentence (the server stopped the agent if it was talking).
+    Partial and final `transcript` messages follow, as in push-to-talk."""
+
+    type: Literal["caller_speaking"] = "caller_speaking"
+
+
+class ListenStoppedMessage(WireModel):
+    """Hands-free listening stopped by the server (the STT stream failed): the page may start it again (a new
+    recording = a new stream) or fall back to push-to-talk."""
+
+    type: Literal["listen_stopped"] = "listen_stopped"
+    reason: str
 
 
 class AgentTextMessage(WireModel):
@@ -152,6 +190,8 @@ VoiceServerMessage = Annotated[
         VoiceErrorMessage,
         CallStartedMessage,
         CallEndedMessage,
+        CallerSpeakingMessage,
+        ListenStoppedMessage,
     ],
     Field(discriminator="type"),
 ]

@@ -59,6 +59,8 @@ class AnthropicLLM(LLMClient):
         if req.tools:
             body["tools"] = [{"name": t.name, "description": t.description, "input_schema": t.parameters} for t in req.tools]
             body["tools"][-1]["cache_control"] = CACHE
+            if req.speak_only:
+                body["tool_choice"] = {"type": "none"}
         return body
 
     async def stream(self, req: LLMRequest) -> AsyncIterator[LLMEvent]:

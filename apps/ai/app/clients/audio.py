@@ -5,9 +5,15 @@ Small audio conversions some providers need, in pure Python (no ffmpeg):
                       new container: we copy them out of the WebM blocks into Ogg pages (no re-encoding, ~1 ms).
   Mp3Encoder          Gradium TTS gives raw PCM; the web player streams mp3 (MediaSource "audio/mpeg"), so we encode
                       each PCM chunk as it arrives (lameenc, LAME bindings) to keep the first byte early.
+  PcmToMulaw          the same PCM for a phone call (Twilio): resampled to 8 kHz and µ-law encoded (stdlib audioop).
 """
 
 import struct
+import warnings
+
+with warnings.catch_warnings():  # audioop: deprecated in 3.12, still in the stdlib until 3.13 (this service pins 3.12)
+    warnings.simplefilter("ignore", DeprecationWarning)
+    import audioop
 
 import lameenc
 
@@ -144,3 +150,28 @@ class Mp3Encoder:
 
     def flush(self) -> bytes:
         return bytes(self.enc.flush())
+
+
+# ── PCM → µ-law 8 kHz (telephone) ──
+
+
+class PcmToMulaw:
+    """16-bit mono PCM chunks at `sample_rate` in, µ-law 8 kHz bytes out (what Twilio plays). Same API as Mp3Encoder."""
+
+    def __init__(self, sample_rate: int):
+        self.rate = sample_rate
+        self.state = None  # resampler state, carried from one chunk to the next (no click between chunks)
+        self.odd = b""
+
+    def encode(self, pcm: bytes) -> bytes:
+        pcm = self.odd + pcm
+        cut = len(pcm) - len(pcm) % 2
+        self.odd, pcm = pcm[cut:], pcm[:cut]
+        if not pcm:
+            return b""
+        if self.rate != 8000:
+            pcm, self.state = audioop.ratecv(pcm, 2, 1, self.rate, 8000, self.state)
+        return audioop.lin2ulaw(pcm, 2)
+
+    def flush(self) -> bytes:
+        return b""
