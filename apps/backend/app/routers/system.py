@@ -113,6 +113,12 @@ async def admin_reset():
     return {"ok": True}
 
 
+@router.post("/admin/demo/losses", status_code=201)
+async def demo_losses(ctx: CtxDep, rate: float = Query(0.10, gt=0, lt=0.5, description="Target waste / revenue over 12 months")):
+    """Demo scenario: the last 12 months' waste brought to `rate` × revenue (consistent lots, receipts, purchase orders)."""
+    return demo.raise_losses(ctx, rate)
+
+
 @router.post("/admin/demo/short-dated", response_model=list[DemoLot], status_code=201)
 async def demo_short_dated(ctx: CtxDep, count: int = Query(6, ge=1, le=8, description="How many products get a surplus lot")):
     """Demo scenario: surplus lots expiring in 1–3 days on the best-selling perishables (once a day; make reset undoes it)."""

@@ -6,8 +6,11 @@
 
 ## 1. Pourquoi ce problème
 
-**Les Parcs de Marennes perdent l'équivalent de 30 % de leur chiffre d'affaires en stock périmé.** Nos slides en
-donnent trois causes :
+**Les Parcs de Marennes perdent environ 10 % de leur chiffre d'affaires en stock périmé** : 910 000 € de marchandise
+détruite sur les 12 derniers mois (au prix d'achat), pour 9,1 M€ de chiffre d'affaires. La moitié de ces pertes vient
+des crustacés.
+
+Nos slides en donnent trois causes :
 
 - des produits frais : huîtres, coquillages, crustacés cuits, qui se gardent quelques jours ;
 - des ventes qui dépendent des saisons ;
@@ -32,7 +35,7 @@ C'est exactement la chaîne que nos slides proposent d'automatiser :
 
 | Critère du hackathon | Ce que ce problème apporte |
 |---|---|
-| **Pertinence** | La perte se chiffre directement en euros : **9 849 €** de stock à risque au prix d'achat sur les lots qui expirent dans 8 jours, dans les données du 24/11/2026. |
+| **Pertinence** | La perte se chiffre directement en euros : 910 000 € détruits sur un an, et **9 849 €** de stock à risque au prix d'achat sur les lots qui expirent dans les 8 prochains jours. |
 | **Un agent vocal a du sens** | Les clients sont des restaurateurs, joignables au téléphone et rarement devant un écran. Un appel court, cadré et répétitif est ce qu'un agent vocal fait le mieux, et ce qu'un commercial n'a pas le temps de faire 30 fois par jour. |
 | **Smart** | L'agent utilise tout l'ERP : stock par lot et DLC, prix négociés, tournées, crédit, historique d'achats. |
 | **Mesurable** | Chaque appel finit dans l'ERP (commande confirmée, refus, rappel), donc on peut tester le taux de réussite. |
@@ -164,6 +167,7 @@ offres.
 
 ```bash
 make setup && make up && make demo-stock        # ERP + IA + web, avec des lots à date courte
+make demo-losses                                 # pertes des 12 derniers mois portées à 10 % du CA (scénario de démo)
 # Page Déstockage → « Calculer depuis le stock » → « Créer et lancer les appels »
 docker compose exec ai python -m app.eval_outbound   # banc de scénarios
 curl localhost:4000/api/campaigns/backtest            # erreur de prévision

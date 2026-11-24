@@ -29,6 +29,9 @@ ps: ## container status
 reset: ## reload the ERP from the data pack (wipes your changes; works for Docker and local)
 	@curl -fsS -X POST http://localhost:$(API_PORT)/api/admin/reset && echo
 
+demo-losses: ## demo: waste of the last 12 months raised to 10 % of revenue (once; make reset to undo)
+	@curl -fsS -X POST http://localhost:$(API_PORT)/api/admin/demo/losses && echo
+
 demo-stock: ## demo: surplus lots expiring in 1-3 days on the best sellers (once a day; after make reset)
 	@curl -fsS -X POST http://localhost:$(API_PORT)/api/admin/demo/short-dated && echo
 
@@ -64,4 +67,4 @@ test: ## AI service tests (offline: adapters, tools, mock); needs uv
 check: ## frontend typecheck + design guards (needs Node + pnpm)
 	pnpm --filter @kit/web typecheck && ./scripts/check-no-native-controls.sh
 
-.PHONY: help setup up down restart logs ps reset demo-stock rebuild clean offline local dev chat types test check
+.PHONY: help setup up down restart logs ps reset demo-stock demo-losses rebuild clean offline local dev chat types test check

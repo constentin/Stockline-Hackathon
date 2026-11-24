@@ -80,3 +80,73 @@ def add_short_dated_surplus(ctx: Ctx, count: int = 6) -> list[Doc]:
             "dailyDemand": round3(demand[p["id"]]),
         })  # fmt: skip
     return created
+
+
+# ───────── Scenario 2: a higher loss rate (10 % of revenue) ─────────
+
+LOSS_NOTE = "DLC dépassée : destruction (scénario de démo : pertes portées à 10 % du CA)"
+LOSS_SHELF_LIFE_MAX = 14  # perishable products only
+
+
+@transactional
+def raise_losses(ctx: Ctx, target_rate: float = 0.10) -> Doc:
+    """Bring the waste of the last 12 months to `target_rate` × revenue (at purchase cost), consistently:
+    on every perishable lot that expired in that year, the company received MORE and destroyed the extra the day
+    after the expiry date — the lot's received quantity, its receipt movement and its purchase-order line grow by the
+    same amount, and a waste movement records the destruction. Nothing that happened after (sales, stock today)
+    changes. Once only (make reset to go back to the data pack)."""
+    t = today()
+    since = add_days(t, -365)
+    if crud.stock_movements.filter(lambda m: m.get("note") == LOSS_NOTE):
+        raise conflict("already_applied", "Le scénario de pertes a déjà été appliqué (make reset pour repartir de zéro)")
+    products = crud.products.rows
+    revenue = sum(
+        (line.get("preparedQty") or line["qty"]) * line["unitPrice"]
+        for o in crud.orders.rows.values() if o["status"] in ("delivered", "invoiced") and since <= o["deliveryDate"] < t
+        for line in o["lines"]
+    )  # fmt: skip
+    cost = lambda pid: (products.get(pid) or {}).get("cost", 0)  # noqa: E731
+    wasted = sum(abs(m["qty"]) * cost(m["productId"]) for m in crud.stock_movements.rows.values()
+                 if m.get("reason") == "waste" and since <= m["at"][:10] < t)  # fmt: skip
+    gap = target_rate * revenue - wasted
+    before = {"revenue": round(revenue, 2), "wasteCost": round(wasted, 2), "rate": round(wasted / revenue, 4) if revenue else 0}
+    if gap <= 0:
+        return {"before": before, "after": before, "lots": 0, "added": 0}
+    lots = [
+        lot for lot in crud.lots.rows.values()
+        if since <= lot["expiresAt"] < t and lot["qtyReceived"] > 0
+        and (products.get(lot["productId"]) or {}).get("shelfLifeDays", 99) <= LOSS_SHELF_LIFE_MAX
+    ]  # fmt: skip
+    base = sum(lot["qtyReceived"] * cost(lot["productId"]) for lot in lots)
+    share = gap / base if base else 0
+    receipts = {m["lotId"]: m for m in crud.stock_movements.rows.values() if m.get("reason") == "receipt" and m.get("lotId")}
+    added, touched = 0.0, 0
+    for lot in sorted(lots, key=lambda x: x["expiresAt"]):
+        p = products[lot["productId"]]
+        extra = _rounded(lot["qtyReceived"] * share, p["unit"]) if p["unit"] in ("piece", "box", "dozen") else round(lot["qtyReceived"] * share, 2)
+        if extra <= 0 or added >= gap:
+            continue
+        crud.lots.put({**lot, "qtyReceived": round3(lot["qtyReceived"] + extra)})
+        if (r := receipts.get(lot["id"])) is not None:
+            crud.stock_movements.put({**r, "qty": round3(r["qty"] + extra)})
+        if lot.get("purchaseOrderId") and (po := crud.purchase_orders.get(lot["purchaseOrderId"])):
+            lines = [dict(line) for line in po["lines"]]
+            for line in lines:
+                if line["productId"] == lot["productId"]:
+                    line["qty"] = round3(line["qty"] + extra)
+                    line["receivedQty"] = round3((line.get("receivedQty") or 0) + extra)
+                    po = {**po, "lines": lines, "totalHt": round(po.get("totalHt", 0) + extra * line["unitPrice"], 2)}
+                    break
+            crud.purchase_orders.put(po)
+        crud.stock_movements.put({
+            "id": crud.stock_movements.next_id("mov_"), "at": f"{add_days(lot['expiresAt'], 1)}T03:00:00.000Z",
+            "productId": lot["productId"], "lotId": lot["id"], "qty": -extra, "reason": "waste", "refType": "manual", "note": LOSS_NOTE,
+        })  # fmt: skip
+        added += extra * p["cost"]
+        touched += 1
+    after_cost = wasted + added
+    log_event(ctx, "stock.adjustment", "stock", "waste",
+              f"Scénario de démo : pertes des 12 derniers mois portées de {before['rate'] * 100:.1f} % à "
+              f"{after_cost / revenue * 100:.1f} % du chiffre d'affaires ({touched} lots)")  # fmt: skip
+    return {"before": before, "after": {"revenue": round(revenue, 2), "wasteCost": round(after_cost, 2), "rate": round(after_cost / revenue, 4)},
+            "lots": touched, "added": round(added, 2)}  # fmt: skip
