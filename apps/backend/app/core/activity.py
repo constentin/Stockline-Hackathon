@@ -35,6 +35,23 @@ def today() -> str:
     return get_meta()["today"]
 
 
+BUSINESS_TZ = "Europe/Paris"  # the company's wall clock (callbacks: « rappelez-moi à 15 h »)
+
+
+def local_now() -> datetime:
+    """The company's local time on the anchored day: meta.today + the real Paris wall-clock time (naive)."""
+    from zoneinfo import ZoneInfo
+
+    t = datetime.now(ZoneInfo(BUSINESS_TZ))
+    d = datetime.fromisoformat(today())
+    return d.replace(hour=t.hour, minute=t.minute, second=t.second)
+
+
+def local_now_str() -> str:
+    """local_now() as YYYY-MM-DDTHH:MM (how callback times are stored and compared)."""
+    return local_now().strftime("%Y-%m-%dT%H:%M")
+
+
 def now() -> str:
     """Timestamp on the anchored day with the real wall-clock time, so new records land "today"."""
     t = datetime.now(timezone.utc)

@@ -36,6 +36,7 @@ export const qk = {
     list: ["campaigns", "list"] as const,
     detail: (id: Id) => ["campaigns", "detail", id] as const,
     call: (id: Id) => ["campaigns", "call", id] as const,
+    callbacks: ["campaigns", "callbacks"] as const,
   },
   categories: ["categories"] as const,
   dashboard: ["dashboard"] as const,
@@ -261,6 +262,9 @@ export const useContextPage = (p?: ContextListParams) =>
 export const useContextEntry = (id?: Id) =>
   useQuery({ queryKey: [...qk.context.all, "one", id] as const, queryFn: () => api.context.get(id!), enabled: !!id });
 export const useCampaigns = () => useQuery({ queryKey: qk.campaigns.list, queryFn: api.campaigns.list });
+/** Callbacks due / upcoming: polled (time passing makes one due, with no ERP event). */
+export const useCallbacks = () =>
+  useQuery({ queryKey: qk.campaigns.callbacks, queryFn: api.campaigns.callbacks, refetchInterval: 20_000 });
 export const useCampaign = (id?: Id) =>
   useQuery({ queryKey: qk.campaigns.detail(id!), queryFn: () => api.campaigns.get(id!), enabled: !!id, placeholderData: keepPreviousData });
 export const useCampaignCall = (id?: Id) =>

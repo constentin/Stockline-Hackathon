@@ -540,7 +540,8 @@ export type { ActivityEvent, Client, Invoice, Order, Payment, Product, PurchaseO
 //  GET   /api/campaign-calls/:id/brief           → CallBrief (what the voice agent reads)
 //  GET   /api/campaign-calls/:id/quote?offerId=&pct=&qty= → CampaignQuote
 //  POST  /api/campaign-calls/:id/accept          body { offerId, qty, discountPct? } → { call, order }
-//  PATCH /api/campaign-calls/:id                 body { status?, summary?, callbackAt? } → CampaignCallView
+//  GET   /api/campaign-calls/callbacks           → CampaignCallbacks (due now / upcoming, company local time)
+//  PATCH /api/campaign-calls/:id                 body { status?, summary?, callbackAt?, callbackInMinutes? } → CampaignCallView
 
 export type CampaignStatus = "active" | "closed";
 export type CampaignCallStatus =
@@ -600,6 +601,13 @@ export interface CampaignCallView extends CampaignCall {
   openOffers: number; // offers of this call that still have stock
 }
 
+/** Callbacks of the active campaigns (« rappelez-moi à 15 h »), company local time YYYY-MM-DDTHH:MM. */
+export interface CampaignCallbacks {
+  now: string;
+  due: CampaignCallView[]; // time passed, an offer still open: to call now
+  upcoming: CampaignCallView[];
+}
+
 export interface CampaignStats {
   calls: number;
   done: number;
@@ -655,9 +663,16 @@ export interface ProposalAnalysis {
   discountPct?: number;
   maxDiscountPct?: number;
   floorPrice?: number; // € / unit: below, donating pays more
+  lotId?: Id;
+  freeStock?: number; // S: the lot minus reservations
+  expectedSales?: number; // N: sold at the usual price before the DLC
+  surplusShare?: number; // R = Q_r / S
+  daysLeft?: number; // J: shortest delivery → DLC among the clients called
+  urgency?: number; // U(J)
+  contribution?: number; // Σ G of the offers (scenario score, € — not a measured gain)
   targets: number;
   expectedCleared: number;
-  expectedRecovered: number; // € HT
+  expectedRecovered: number; // € HT, if the offers are accepted
   note?: string; // why the offer is not in the campaign
 }
 

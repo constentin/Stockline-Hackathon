@@ -5,6 +5,8 @@ just said, before (or instead of) the big model:
     intent    what he wants: validate the recap, choose products, negotiate, refuse, be called back…
     offer     which product of the call brief he is talking about (or none / several)
     complete  is his sentence finished? (hands-free mode: answer now, or wait for the rest)
+    addressee is he talking to the agent, or to someone next to him (« Kevin, sors les poubelles ! »)?
+    clarity   can his sentence be understood at all (« Le chat des dés vingt pour la cave » → no: ask, don't guess)
 
 It is started on the PARTIAL transcript while the client is still speaking (voice_session.py), so at the end of
 his sentence the answer is usually already there: the routing costs no latency. What is done with it is in
@@ -45,6 +47,8 @@ class Route:
     offer_confidence: float
     complete: float  # probability that his sentence is finished
     ms: int
+    addressed: float = 1.0  # probability that he was talking to the agent (not to a colleague next to him)
+    clear: float = 1.0  # probability that his sentence can be understood (a garbled transcript scores low)
 
 
 def same_words(a: str, b: str) -> bool:
@@ -63,6 +67,28 @@ async def classify(text: str, agent_said: str, offers: list[dict]) -> Route | No
         "intent": choice_question("Au téléphone, que veut le client d'après sa dernière phrase ?", INTENTS),
         "offer": choice_question(
             "De quel produit le client parle-t-il ?", {**names, NONE_OFFER: "aucun produit précis, ou plusieurs produits"}
+        ),
+        "addressee": choice_question(
+            "Un restaurateur est au téléphone avec une commerciale qui lui propose des produits. À qui s'adresse sa "
+            "dernière phrase ?",
+            {
+                "agent": "à la commerciale au téléphone : il répond à ce qu'elle vient de dire, pose une question sur ses "
+                "produits, leurs prix, quantités, dates ou la livraison, accepte, refuse, dit au revoir ou lui demande "
+                "de patienter",
+                "autre": "à quelqu'un près de lui dans le restaurant : un collègue, le chef, un serveur ; il parle du "
+                "service, des tables, de la cuisine, demande de poser, ranger, préparer quelque chose, ou appelle "
+                "quelqu'un par son prénom",
+            },
+        ),
+        "clarity": choice_question(
+            "Au téléphone, une commerciale propose des produits à un restaurateur. Peut-elle comprendre ce que veut le "
+            "client d'après sa dernière phrase (transcription automatique, qui peut contenir des erreurs) ?",
+            {
+                "clair": "la phrase a un sens dans la conversation : une réponse, un choix de produit, une quantité, une "
+                "question, un oui, un non, un au revoir",
+                "pas_clair": "la phrase est incompréhensible ou incohérente : mots sans rapport avec la conversation, "
+                "transcription abîmée, phrase coupée, produit ou quantité impossibles à identifier",
+            },
         ),
         "complete": yes_no_question(
             "Le client a-t-il fini sa phrase ?",
@@ -84,6 +110,8 @@ async def classify(text: str, agent_said: str, offers: list[dict]) -> Route | No
             offer_confidence=a["offer"]["confidence"],
             complete=a["complete"]["noul"],
             ms=int((time.perf_counter() - t0) * 1000),
+            addressed=a["addressee"]["probabilities"].get("agent", 1.0),
+            clear=a["clarity"]["probabilities"].get("clair", 1.0),
         )
     except Exception as e:  # timeout, network, unexpected shape: no routing, the big model handles the turn
         print(f"[ai] Jev routing skipped ({type(e).__name__}: {e})", flush=True)

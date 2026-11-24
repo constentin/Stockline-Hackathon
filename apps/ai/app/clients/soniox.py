@@ -41,6 +41,11 @@ def audio_format(mime: str) -> dict:
     return {"audio_format": "auto"}
 
 
+def _mean(xs: list[float]) -> float | None:
+    """Mean confidence of the words heard (Soniox gives one per token, 0–1)."""
+    return round(sum(xs) / len(xs), 3) if xs else None
+
+
 class SonioxSTT(STTClient):
     name = "soniox"
     streams = True
@@ -75,6 +80,7 @@ class SonioxSTT(STTClient):
             await ws.send(json.dumps(self.start_request(hint, mime)))
             async with sending(ws, audio, end=FINALIZE):
                 final = ""  # final tokens, accumulated (each arrives once)
+                confs: list[float] = []  # their confidence
                 async for raw in ws:
                     msg = json.loads(raw)
                     if msg.get("error_code"):
@@ -90,10 +96,12 @@ class SonioxSTT(STTClient):
                             continue
                         elif tok.get("is_final"):
                             final += text
+                            if tok.get("confidence") is not None:
+                                confs.append(tok["confidence"])
                         else:
                             provisional += text
                     if finalized or msg.get("finished"):
-                        yield STTUpdate(final.strip(), final=True, stable=final.strip())
+                        yield STTUpdate(final.strip(), final=True, stable=final.strip(), confidence=_mean(confs))
                         return  # leaving the blocks closes the socket
                     yield STTUpdate((final + provisional).strip(), stable=final.strip())
         raise provider_error("soniox stt", "closed", "connection closed before the final words")
@@ -121,6 +129,7 @@ class SonioxSTT(STTClient):
             try:
                 async with sending(ws, audio, end=FINALIZE):
                     sentence = ""  # final words of the current sentence
+                    confs: list[float] = []
                     async for raw in ws:
                         msg = json.loads(raw)
                         if msg.get("error_code"):
@@ -132,17 +141,19 @@ class SonioxSTT(STTClient):
                             text = tok.get("text") or ""
                             if text in ("<end>", "<fin>"):  # end of a sentence: everything before it is final
                                 if sentence.strip():
-                                    yield STTUpdate(sentence.strip(), final=True, stable=sentence.strip())
-                                sentence = ""
+                                    yield STTUpdate(sentence.strip(), final=True, stable=sentence.strip(), confidence=_mean(confs))
+                                sentence, confs = "", []
                             elif text.startswith("<"):
                                 continue
                             elif tok.get("is_final"):
                                 sentence += text
+                                if tok.get("confidence") is not None:
+                                    confs.append(tok["confidence"])
                             else:
                                 provisional += text
                         if msg.get("finished"):
                             if sentence.strip():
-                                yield STTUpdate(sentence.strip(), final=True, stable=sentence.strip())
+                                yield STTUpdate(sentence.strip(), final=True, stable=sentence.strip(), confidence=_mean(confs))
                             return
                         yield STTUpdate((sentence + provisional).strip(), stable=sentence.strip())
             finally:

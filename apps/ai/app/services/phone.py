@@ -283,9 +283,10 @@ class PhoneConnection(VoiceConnection):
                 self.unplayed.add(name)
                 await self.twilio({"event": "mark", "mark": {"name": name}})
                 return
-            case CallerSpeakingMessage():  # barge-in: the caller talks over the agent
+            case CallerSpeakingMessage():  # barge-in: the caller talks over the agent (heard: the played marks)
                 await self.twilio({"event": "clear"})
                 self.unplayed.clear()
+                self.try_apply_cut()
                 self.agent_playing = False
                 self.cancel_hang_up()
             case AgentDoneMessage():
@@ -340,7 +341,22 @@ class PhoneConnection(VoiceConnection):
         await self.start_listening(PHONE_MIME)  # after dial: the call's products and contact go in the STT vocabulary
         return self.listener is not None
 
+    def note_barge_in(self) -> None:
+        """Phone: what was heard = the sentences whose mark Twilio echoed (services/heard.py)."""
+        if self.reply and not self.reply.applied:
+            self.reply.cut_by_marks = True
+
+    async def after_item(self, index: int) -> None:
+        """A sentence sent: a mark, echoed by Twilio once it has been played."""
+        name = f"i{self.turn_seq}_{index}"
+        self.unplayed.add(name)
+        await self.twilio({"event": "mark", "mark": {"name": name}})
+
     def on_mark(self, name: str) -> None:
+        if name.startswith("i") and "_" in name and self.reply:
+            seq, _, idx = name[1:].partition("_")
+            if seq.isdigit() and idx.isdigit() and int(seq) == self.reply.seq:
+                self.reply.played.add(int(idx))
         self.unplayed.discard(name)
         if not self.unplayed:
             self.agent_playing = False

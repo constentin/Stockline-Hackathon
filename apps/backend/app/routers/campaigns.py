@@ -4,9 +4,9 @@ from fastapi import APIRouter, Query
 
 from app import crud
 from app.dependencies import CtxDep
-from app.schemas.inputs import CampaignAcceptInput, CampaignCallPatch, CampaignImportInput, CampaignPatch
+from app.schemas.inputs import CampaignAcceptInput, CampaignCallPatch, CampaignImportInput, CampaignPatch, CampaignTranscriptInput
 from app.schemas.views import (
-    CallBrief, CampaignAcceptResult, CampaignCallView, CampaignDetail, CampaignQuote, CampaignSummary, ClearanceProposal, NextCall,
+    CallBrief, CampaignAcceptResult, CampaignCallbacks, CampaignCallView, CampaignDetail, CampaignQuote, CampaignSummary, ClearanceProposal, NextCall,
 )
 from app.services import campaigns, clearance
 
@@ -33,6 +33,19 @@ async def proposal():
     return clearance.proposal()
 
 
+@router.get("/backtest")
+async def backtest(weeks: int = Query(8, ge=1, le=26), seasonal: bool = True, rhythm: bool = True):
+    """The demand forecast's error (WAPE, bias) on the last `weeks` weeks, per unit, vs « same as the previous week ».
+    seasonal / rhythm = false: without our seasonal analogues / rhythm adjustment (to compare)."""
+    return clearance.backtest(weeks, seasonal, rhythm)
+
+
+@router.get("/learning")
+async def learning():
+    """λ and ε as learned from the randomised pairs of past campaigns (initial values until enough pairs)."""
+    return clearance.learned()
+
+
 @router.get("/{id}", response_model=CampaignDetail)
 async def get_campaign(id: str):
     return campaigns.campaign_detail(id)
@@ -48,6 +61,13 @@ async def update_campaign(id: str, body: CampaignPatch, ctx: CtxDep):
 async def next_call(id: str):
     """Best-ranked call to make now (pending, or a callback that is due) with an offer still open; no `call` = done."""
     return campaigns.next_call(id)
+
+
+@calls.get("/callbacks", response_model=CampaignCallbacks)
+async def callbacks():
+    """Callbacks of the active campaigns: due now and upcoming (company local time). Polled by the AI service, which
+    rings them by phone when the time comes, and by the web, which shows them."""
+    return campaigns.callbacks()
 
 
 @calls.get("/{id}", response_model=CampaignCallView)
@@ -81,6 +101,12 @@ async def accept_offer(id: str, body: CampaignAcceptInput, ctx: CtxDep):
 async def confirm_call(id: str, ctx: CtxDep):
     """The client agreed to the recap: confirms the call's order and records the call as accepted, in one step."""
     return campaigns.confirm_call(ctx, id)
+
+
+@calls.post("/{id}/transcript", response_model=CampaignCallView)
+async def save_transcript(id: str, body: CampaignTranscriptInput, ctx: CtxDep):
+    """What was said in the attempt that just ended: given back in the brief of the next attempt (a callback)."""
+    return campaigns.save_transcript(ctx, id, body.lines)
 
 
 @calls.patch("/{id}", response_model=CampaignCallView)

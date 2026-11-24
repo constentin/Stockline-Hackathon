@@ -122,6 +122,11 @@ function TurnRows({ t, last, activity, level }: { t: VoiceTurn; last: boolean; a
               <span className="flex items-start gap-1.5 text-[12px] text-destructive"><CircleAlert size={13} strokeWidth={1.75} className="mt-[2px] shrink-0" />{a.error}</span>
             ) : null}
             {a.interrupted ? <span className="text-[11.5px] text-muted-foreground">Interrompu par l'appelant</span> : null}
+            {a.unheard ? (
+              <span className="max-w-full text-[11.5px] text-muted-foreground" title="L'agent le sait : il redira ce qui compte encore">
+                Coupé — pas entendu : <span className="line-through decoration-muted-foreground/60">{a.unheard}</span>
+              </span>
+            ) : null}
             <TurnChips t={t} />
           </div>
         </div>

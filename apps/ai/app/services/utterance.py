@@ -30,6 +30,7 @@ class Utterance:
         self.frames: list[bytes] = []
         self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()  # frames for the live stream, None = end of audio
         self.live = asyncio.create_task(self._listen()) if stt.streams else None
+        self.confidence: float | None = None  # mean word confidence of the final transcript (when the STT gives it)
 
     def feed(self, frame: bytes) -> None:
         self.frames.append(frame)
@@ -65,6 +66,7 @@ class Utterance:
         async with aclosing(self.stt.transcribe_stream(self._audio(), self.mime, hint)) as updates:  # type: ignore[type-var]
             async for update in updates:
                 if update.final:
+                    self.confidence = update.confidence
                     return update.text
                 if update.text != shown:
                     shown = update.text

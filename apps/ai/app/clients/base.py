@@ -74,6 +74,7 @@ class STTUpdate:
     text: str
     final: bool = False
     stable: str = ""
+    confidence: float | None = None  # final updates: mean confidence of the words (Soniox), None = unknown
 
 
 class STTClient(ABC):

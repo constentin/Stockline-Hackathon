@@ -74,6 +74,7 @@ class PlaybackMessage(WireModel):
 
     type: Literal["playback"] = "playback"
     playing: bool
+    played_ms: int | None = None  # when it stops because the caller cut it: how far it had played (what he heard)
 
 
 VoiceClientMessage = Annotated[
@@ -113,6 +114,13 @@ class CallerSpeakingMessage(WireModel):
     Partial and final `transcript` messages follow, as in push-to-talk."""
 
     type: Literal["caller_speaking"] = "caller_speaking"
+
+
+class AgentCutMessage(WireModel):
+    """The caller cut the agent: what he did NOT hear of its reply (the agent knows it, and says what matters again)."""
+
+    type: Literal["agent_cut"] = "agent_cut"
+    unheard: str
 
 
 class ListenStoppedMessage(WireModel):
@@ -192,6 +200,7 @@ VoiceServerMessage = Annotated[
         CallEndedMessage,
         CallerSpeakingMessage,
         ListenStoppedMessage,
+        AgentCutMessage,
     ],
     Field(discriminator="type"),
 ]

@@ -14,8 +14,10 @@ the clients who buy the product the most.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from app import crud
-from app.core.activity import Ctx, log_event, now, today
+from app.core.activity import Ctx, local_now, local_now_str, log_event, now, today
 from app.core.db import Doc, transactional
 from app.core.errors import bad_request, conflict
 from app.core.utils import cmp, compact, fmt_eur, fr_day, fr_num, js_str, normalize, round2, round3, sort_by
@@ -159,8 +161,8 @@ def next_call(campaign_id: str) -> Doc:
     if campaign["status"] != "active":
         return {"pending": 0}
     sold = _sold(campaign_id)
-    t = now()
-    due = [c for c in _calls(campaign_id) if c["status"] == "pending" or (c["status"] == "callback" and (c.get("callbackAt") or "") <= t)]
+    t = local_now_str()
+    due = [c for c in _calls(campaign_id) if c["status"] == "pending" or (c["status"] == "callback" and (c.get("callbackAt") or "")[:16] <= t)]
     ready = [c for c in due if _open_offers(c, campaign, sold)]
     return {**({"call": call_view(ready[0], campaign, sold)} if ready else {}), "pending": len(ready)}
 
@@ -218,7 +220,48 @@ def call_brief(call_id: str) -> Doc:
         "context": [f"{e['title']} : {e['body'][:300]}" for e in entries[:6]],
         "accepted": _live_lines(call) or None,
         "orderId": call.get("orderId"),
+        "previousCalls": (call.get("conversations") or [])[-2:] or None,
+        "nowLocal": local_now_str(),
+        "nowSpoken": _spoken_now(),
     })  # fmt: skip
+
+
+DAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+MONTHS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+
+
+def _spoken_now() -> str:
+    """« mardi 24 novembre, 14 h 50 » (what the agent reads to place a callback)."""
+    t = local_now()
+    return f"{DAYS[t.weekday()]} {t.day} {MONTHS[t.month - 1]}, {t.hour} h {t.minute:02d}"
+
+
+@transactional
+def save_transcript(ctx: Ctx, call_id: str, lines: list[str]) -> Doc:
+    """Keep what was said in this attempt (last 60 lines), so a callback picks the conversation up where it stopped."""
+    call = crud.campaign_calls.require(call_id)
+    lines = [line.strip() for line in lines if line.strip()][-60:]
+    if not lines:
+        return call_view(call)
+    entry = compact({"at": local_now_str(), "status": call["status"], "summary": call.get("summary"), "lines": lines})
+    updated = crud.campaign_calls.put({**call, "conversations": [*(call.get("conversations") or []), entry][-3:]})
+    return call_view(updated)
+
+
+def callbacks() -> Doc:
+    """Callbacks of the active campaigns: due (time passed, an offer still open) and upcoming, soonest first."""
+    t = local_now_str()
+    due, upcoming = [], []
+    for campaign in crud.campaigns.all():
+        if campaign["status"] != "active":
+            continue
+        sold = _sold(campaign["id"])
+        for c in _calls(campaign["id"]):
+            if c["status"] != "callback" or not c.get("callbackAt") or not _open_offers(c, campaign, sold):
+                continue
+            (due if c["callbackAt"][:16] <= t else upcoming).append(call_view(c, campaign, sold))
+    key = lambda c: c.get("callbackAt") or ""  # noqa: E731
+    return {"now": t, "due": sorted(due, key=key), "upcoming": sorted(upcoming, key=key)}
 
 
 def _check_active(campaign: Doc) -> None:
@@ -316,6 +359,7 @@ def import_campaign(ctx: Ctx, input: Doc) -> Doc:
             "expiresAt": expires,
             "discountPct": o["discountPct"],
             "maxDiscountPct": o["maxDiscountPct"],
+            "experiment": o.get("experiment"),
         }))  # fmt: skip
     by_id = {o["id"]: o for o in offers}
 
@@ -441,6 +485,11 @@ def update_call(ctx: Ctx, call_id: str, patch: Doc) -> Doc:
     client = crud.clients.require(call["clientId"])
     status = patch.get("status") or call["status"]
     changes: Doc = {}
+    minutes = patch.pop("callbackInMinutes", None) or patch.pop("callback_in_minutes", None)
+    if minutes:  # « dans 10 minutes »: from the company's clock
+        patch["callbackAt"] = (local_now() + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M")
+    elif patch.get("callbackAt"):
+        patch["callbackAt"] = patch["callbackAt"][:16]
     if status != call["status"]:
         if status == "in_progress":
             _check_active(campaign)

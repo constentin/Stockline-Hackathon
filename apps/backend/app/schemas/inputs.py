@@ -13,6 +13,7 @@ from pydantic import AfterValidator, Field, StringConstraints
 
 from app.schemas.base import Input
 from app.schemas.domain import (
+    OfferExperiment,
     CampaignCallStatus,
     CampaignStatus,
     ClientEventType,
@@ -390,6 +391,7 @@ class CampaignOfferInput(Input):
     expires_at: IsoDateStr | None = None  # defaults to the lot's expiry
     discount_pct: Pct
     max_discount_pct: Pct
+    experiment: OfferExperiment | None = None  # set by the clearance model (λ / ε learning), kept as is
 
 
 class CampaignTargetInput(Input):
@@ -415,10 +417,17 @@ class CampaignAcceptInput(Input):
     discount_pct: Pct | None = None  # defaults to the offer's opening discount
 
 
+class CampaignTranscriptInput(Input):
+    """The spoken exchange of a call that just ended: « Client : … » / « Agent : … » lines."""
+
+    lines: list[Annotated[str, Field(max_length=1200)]] = Field(max_length=200)
+
+
 class CampaignCallPatch(Input):
     status: CampaignCallStatus | None = None
     summary: NonEmpty | None = None
-    callback_at: IsoDateTimeStr | None = None  # with status "callback"
+    callback_at: IsoDateTimeStr | None = None  # with status "callback": company local time, YYYY-MM-DDTHH:MM
+    callback_in_minutes: int | None = Field(None, ge=1, le=7 * 24 * 60)  # « rappelez-moi dans 10 minutes »
 
 
 class CampaignPatch(Input):

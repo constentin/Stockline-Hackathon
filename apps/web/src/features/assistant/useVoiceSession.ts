@@ -26,7 +26,7 @@ export interface VoiceTurn {
   id: number;
   /** text: live while recording/transcribing (stable = its final words), definitive once status is "final". */
   caller: { text: string; stable?: string; at: number; status: "recording" | "transcribing" | "final"; typed?: boolean; cue?: boolean };
-  agent: { text: string; at?: number; tools: ToolRun[]; done: boolean; error?: string; interrupted?: boolean };
+  agent: { text: string; at?: number; tools: ToolRun[]; done: boolean; error?: string; interrupted?: boolean; unheard?: string };
   timings?: TurnTimings;
   /** Client-side: caller release → agent audio actually starts playing (or speech synthesis starts). */
   perceivedMs?: number;
@@ -118,18 +118,20 @@ export function useVoiceSession() {
 
   // ── Playback ──
   const playing = useRef(false);
-  const setPlaying = useCallback((on: boolean) => {
+  const setPlaying = useCallback((on: boolean, playedMs?: number) => {
     if (playing.current === on) return;
     playing.current = on;
-    send({ type: "playback", playing: on }); // hands-free: the server ignores the agent's own voice meanwhile
+    // hands-free: the server ignores the agent's own voice meanwhile; playedMs (cut by the caller) = what he heard
+    send(playedMs != null ? { type: "playback", playing: on, playedMs } : { type: "playback", playing: on });
   }, [send]);
 
   const stopPlayback = useCallback(() => {
     try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
     const p = player.current;
     player.current = undefined;
+    const playedMs = p?.playedMs;
     p?.stop();
-    setPlaying(false);
+    setPlaying(false, playedMs);
     setActivity((a) => (a === "speaking" ? "idle" : a));
   }, [setPlaying]);
 
@@ -197,6 +199,16 @@ export function useVoiceSession() {
         try { rec?.stop(); } catch { /* ignore */ }
         setListening(false);
         setLastError(m.reason);
+        break;
+      }
+      case "agent_cut": {
+        // the caller cut the agent: mark what he did not hear on the turn it belongs to (the previous agent reply)
+        setTurns((ts) => {
+          const i = [...ts].reverse().findIndex((t) => t.agent.text);
+          if (i < 0) return ts;
+          const k = ts.length - 1 - i;
+          return ts.map((t, j) => (j === k ? { ...t, agent: { ...t.agent, unheard: m.unheard } } : t));
+        });
         break;
       }
       case "agent_text":
