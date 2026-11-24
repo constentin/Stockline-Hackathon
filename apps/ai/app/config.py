@@ -29,6 +29,7 @@ class LLMSettings:
     api_key: str
     base_url: str  # empty → the provider's public endpoint
     effort: str  # anthropic only: low | medium | high
+    fast_model: str  # outbound calls: the model for the simple turns Jev recognised (empty: the provider small model)
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,22 @@ class JevSettings:
 
 
 @dataclass(frozen=True)
+class TwilioSettings:
+    """Phone calls through Twilio (services/phone.py). All four set → the "call my phone" button appears."""
+
+    account_sid: str  # AC… (Twilio console, home page)
+    auth_token: str
+    from_number: str  # your Twilio number, E.164 (+33…, +1…)
+    to_number: str  # the ONLY number the agent ever calls: your own phone, E.164
+    public_url: str  # how Twilio reaches this service from the internet (ngrok / cloudflared), https://…
+    max_call_s: int  # Twilio hangs up after this (a forgotten call never runs for an hour)
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.account_sid and self.auth_token and self.from_number and self.to_number and self.public_url)
+
+
+@dataclass(frozen=True)
 class Settings:
     port: int
     erp_api_url: str
@@ -66,6 +83,7 @@ class Settings:
     stt: STTSettings
     tts: TTSSettings
     jev: JevSettings  # optional decision model, used next to the LLM (clients/jev.py)
+    twilio: TwilioSettings  # optional: real phone calls (services/phone.py)
 
 
 settings = Settings(
@@ -79,6 +97,7 @@ settings = Settings(
         api_key=env("LLM_API_KEY"),
         base_url=env("LLM_BASE_URL"),
         effort=env("LLM_EFFORT", "low"),
+        fast_model=env("LLM_FAST_MODEL"),
     ),
     stt=STTSettings(
         provider=env("STT_PROVIDER", "mock").lower(),
@@ -98,5 +117,13 @@ settings = Settings(
         api_key=env("JEV_API_KEY"),
         base_url=env("JEV_BASE_URL", "https://api.typesafe.ai").rstrip("/"),
         model=env("JEV_MODEL", "jev-latest"),
+    ),
+    twilio=TwilioSettings(
+        account_sid=env("TWILIO_ACCOUNT_SID"),
+        auth_token=env("TWILIO_AUTH_TOKEN"),
+        from_number=env("TWILIO_FROM_NUMBER").replace(" ", ""),
+        to_number=env("TWILIO_TO_NUMBER").replace(" ", ""),
+        public_url=env("PUBLIC_URL").rstrip("/"),
+        max_call_s=int(env("TWILIO_MAX_CALL_S", "300")),
     ),
 )

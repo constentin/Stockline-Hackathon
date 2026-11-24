@@ -38,7 +38,8 @@ def test_tool_sets():
     inbound = {t.name for t in all_tools()}
     outbound = {t.name for t in outbound_tools()}
     assert "accept_offer" not in inbound  # inbound prompts (and their cache) are unchanged
-    assert {"get_call_brief", "quote_offer", "accept_offer", "record_call_outcome", "confirm_order"} <= outbound
+    assert {"get_call_brief", "quote_offer", "accept_offer", "confirm_call_order", "record_call_outcome"} <= outbound
+    assert "confirm_order" not in outbound  # confirm_call_order confirms AND closes the call (one model step less)
     assert "search" not in outbound
 
 

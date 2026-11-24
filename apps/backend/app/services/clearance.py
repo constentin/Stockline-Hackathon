@@ -40,7 +40,7 @@ BASE_ACCEPT = (0.10, 0.40)  # acceptance without discount: occasional → regula
 DONATION_RATE = 0.6  # tax reduction of a donation, as a share of cost (to confirm with the accountant)
 MIN_LOSS_VALUE = 30.0  # € at cost: below that, no call is worth it
 MAX_TARGETS_PER_OFFER = 8
-MAX_OFFERS_PER_CALL = 3  # a phone call, not a catalogue: the client's 3 most valuable offers
+MAX_OFFERS_PER_CALL = 4  # a phone call, not a catalogue: the client's 4 most valuable offers, presented together
 COVER = 1.5  # keep calling candidates until they are expected to absorb 1.5 × the loss
 GRID = [d / 100 for d in range(5, 65, 5)]
 

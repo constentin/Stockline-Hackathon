@@ -1,11 +1,11 @@
 /** Latency chips: per turn (from agent_done.timings) and the running average across turns. */
-import type { TurnTimings } from "@kit/shared";
+import type { TurnTimingMs } from "@kit/shared";
 import { Gauge } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { SECTION_LABEL } from "@/ui";
 import type { VoiceTurn } from "@/features/assistant/useVoiceSession";
 
-type Key = keyof TurnTimings | "perceivedMs";
+type Key = TurnTimingMs | "perceivedMs";
 const METRICS: { key: Key; label: string; title: string }[] = [
   { key: "sttMs", label: "STT", title: "Transcription de la parole de l'appelant" },
   { key: "llmFirstTokenMs", label: "LLM 1er", title: "Premier token du modèle" },

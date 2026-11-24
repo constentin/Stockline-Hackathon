@@ -173,9 +173,37 @@ hangup                                   ──►   agent stopped; outcome reco
                                          ◄──   call_ended {callId, outcome?}
 ```
 
+Hands-free (when `ready.handsFree` is true, i.e. Soniox): no key, the mic streams the whole call.
+
+```
+listen_start {mime}                      ──►   one live STT stream for the call (services/listener.py)
+binary frames … (continuously)           ──►
+playback {playing}                       ──►   the agent's audio starts / stops in the browser (echo filtering)
+                                         ◄──   caller_speaking            (new caller sentence; agent cut if talking)
+                                         ◄──   transcript final:false …, transcript final:true, agent_* …  (as above)
+                                         ◄──   listen_stopped {reason}    (STT stream failed: start a new recording)
+listen_stop                              ──►
+```
+
+How an outbound turn runs (speed and reliability, see the docstrings):
+
+1. **Jev routing** (`services/router.py`): one Jev request = intent + product + "is the sentence finished?". Started on
+   the partial transcript (push-to-talk: at `audio_end`; hands-free: as soon as the words stop), so it is usually ready.
+2. **Plan** (`outbound.plan_turn`): when Jev is sure, the code acts in the ERP first (yes to a recap → order
+   confirmed and call closed; refusal; "don't call me again") and the small model (`LLM_FAST_MODEL`, Haiku by default)
+   only says it, without tools. Complex turns (quantities, negotiation) go to `LLM_MODEL` with a product hint.
+3. **Waiting phrase** (`services/fillers.py`): pre-recorded once per voice, played at once when the model will work
+   first (Jev knows it, or the model calls a tool before speaking).
+4. **Fallback** (`outbound.run_outbound`): model error or no event within 4 s → the other model; then an excuse.
+   A model that says nothing after a code action → a fixed sentence. `confirm_call_order` refuses if Jev hears no clear yes.
+5. **Spoken text** (`services/speech_text.py`): "15,73 €" → "15 euros 73", "kg" → "kilos"… before every TTS call.
+
+`TurnTimings` adds `routeMs`, `intent`, `action`, `model`, `fillerMs`, `endpointMs` (hands-free).
+
 - The brief goes at the END of the system prompt (`run_agent(system_extra=…)`) and is not refreshed during the call:
   the prompt cache keeps serving everything before it. Dates are given in words (`deliveryOn`, `keepsUntil`).
-- Text test of one call: `uv run python -m app.cli --call ccl_000001`. Scenario bench: `uv run python -m app.eval_outbound`.
+- Text test of one call: `uv run python -m app.cli --call ccl_000001`. Scenario bench (same path as the voice
+  session): `uv run python -m app.eval_outbound [--repeat 3] [--no-router]`. Voice bench: `uv run python -m app.eval_tts`.
 
 - `WS /voice/command[?speak=1]`: the same live audio for ONE voice command (the ⌥Space HUD): `audio_start`, frames,
   `audio_end` (or one `text`) → `transcript {final: false}` while speaking, then the `POST /command` events as JSON

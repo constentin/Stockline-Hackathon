@@ -77,6 +77,53 @@ async def accept_offer(
     return order
 
 
+YES_THRESHOLD = 0.35  # below: Jev is fairly sure the client did NOT agree (hesitation, question, change)
+
+
+def last_exchange(messages: list) -> tuple[str, str]:
+    """(what the agent said before the client's last words, the client's last words)."""
+    i = next((i for i in range(len(messages) - 1, -1, -1) if messages[i].role == "user"), None)
+    if i is None:
+        return "", ""
+    agent = next((m.content for m in reversed(messages[:i]) if m.role == "assistant" and m.content), "")
+    return agent or "", messages[i].content or ""
+
+
+async def client_agreed(messages: list) -> float | None:
+    """Jev: probability that the client's last words are a clear yes to the recap. None = no Jev / Jev failed."""
+    from app.clients import get_jev_client  # optional (JEV_API_KEY)
+
+    jev = get_jev_client()
+    agent, client = last_exchange(messages)
+    if not jev or not client:
+        return None
+    try:
+        return await jev.yes_no(
+            {"agent": agent, "client": client},
+            "Au téléphone, le client accepte-t-il clairement de valider la commande que l'agent vient de récapituler ?",
+            yes="oui sans réserve : oui, c'est bon, allez-y, validez, parfait, ça marche",
+            no="il hésite, pose une question, change une quantité ou un produit, refuse, ou parle d'autre chose",
+        )
+    except Exception:
+        return None
+
+
+@tool
+async def confirm_call_order(ctx: ToolContext, call_id: str = call_id_field()) -> dict:
+    """
+    Le client a dit oui au récapitulatif : confirme la commande de l'appel ET enregistre l'appel comme accepté (pas
+    besoin de record_call_outcome ensuite). Refusé si le client n'a pas clairement dit oui : redemande alors.
+    Confirm the call's order and close the call as accepted.
+    """
+    p = await client_agreed(ctx.messages)
+    if p is not None and p < YES_THRESHOLD:
+        raise ValueError("Le client n'a pas clairement dit oui : ne confirme pas, réponds-lui ou redemande s'il valide")
+    res = await ctx.erp.post(f"/api/campaign-calls/{enc(call_id)}/confirm")
+    order = summarize_order(res["order"])
+    order["warnings"] = [w for w in order["warnings"] if w.get("code") not in EXPECTED_WARNINGS]
+    return {**order, "callStatus": res["call"]["status"]}
+
+
 @tool
 async def record_call_outcome(
     ctx: ToolContext,
@@ -88,8 +135,8 @@ async def record_call_outcome(
     callback_at: str | None = Field(None, description="Pour callback : quand rappeler, YYYY-MM-DDTHH:MM"),
 ) -> dict:
     """
-    Clôt l'appel sortant : enregistre le résultat dans la campagne et dans l'historique du client. À appeler une fois,
-    à la fin de l'appel, avant l'au revoir. Record the call outcome.
+    Clôt l'appel sortant sans commande validée (refus, rappel, ne plus appeler, sans réponse) : enregistre le résultat
+    dans la campagne et l'historique du client. Inutile après confirm_call_order. Record the call outcome.
     """
     body = without_none({"status": outcome, "summary": summary, "callbackAt": callback_at})
     res = await ctx.erp.patch(f"/api/campaign-calls/{enc(call_id)}", body)

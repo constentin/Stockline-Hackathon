@@ -4,10 +4,17 @@
  * the server transcribes them as they arrive and sends `transcript` final:false (live text) before the final one.
  * Agent audio: binary frames between agent_audio_start/end → one Blob → <audio>. Mock TTS → speechSynthesis (fr-FR).
  * Outbound clearance call: dial(callId) restarts the session on that call (the agent speaks first), hangUp() ends it.
+ * Hands-free (startListening, when the STT supports it): the mic streams the whole call, the server detects the end of
+ * each sentence and sends `caller_speaking` when the caller starts one (the agent's audio is cut: barge-in). The page
+ * tells the server when the agent's audio plays (`playback`), so its own voice coming back through the mic is ignored.
+ * Phone call (Twilio, when the AI service is configured for it): dialPhone(callId) makes the agent ring YOUR phone; the
+ * audio goes phone ↔ server, and the page only WATCHES (WS /ai/voice/phone: the same messages, no audio), so the
+ * conversation, the tools and the timings show live here. hangUpPhone() ends the call through Twilio.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MOCK_TTS_MIME, type TurnTimings, type VoiceClientMessage, type VoiceServerMessage } from "@kit/shared";
+import { MOCK_TTS_MIME, type PhoneCallRequest, type PhoneInfo, type TurnTimings, type VoiceClientMessage, type VoiceServerMessage } from "@kit/shared";
 import { AI_BASE } from "@/lib/api";
+import { toast } from "@/ui/toast";
 import { SegmentPlayer } from "./audio-player";
 import type { ToolRun } from "./tools";
 
@@ -25,7 +32,7 @@ export interface VoiceTurn {
   perceivedMs?: number;
 }
 
-export interface Providers { llm: string; stt: string; tts: string; sessionId: string }
+export interface Providers { llm: string; stt: string; tts: string; sessionId: string; handsFree: boolean }
 
 /** The outbound call of the session: dialing → live (call_started) → ending (hangup sent) → ended (call_ended). */
 export interface OutboundCallState {
@@ -36,10 +43,23 @@ export interface OutboundCallState {
   /** recorded at hang-up by the server; null = the agent had recorded it itself */
   outcome?: string | null;
   error?: string;
+  /** a real phone call through Twilio: the audio is on the phone, this page only shows the conversation */
+  phone?: boolean;
 }
 
 const REC_MIME = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
-const wsUrl = () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${AI_BASE}/voice`;
+const wsUrl = (path = "/voice") => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${AI_BASE}${path}`;
+
+async function postPhone(path: string, body: PhoneCallRequest): Promise<string | undefined> {
+  try {
+    const res = await fetch(`${AI_BASE}/phone/${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (res.ok) return undefined;
+    const j = await res.json().catch(() => undefined);
+    return j?.error?.message ?? `Erreur ${res.status}`;
+  } catch {
+    return "Service IA injoignable (localhost:4100)";
+  }
+}
 
 export function useVoiceSession() {
   const [conn, setConn] = useState<Conn>("connecting");
@@ -50,6 +70,8 @@ export function useVoiceSession() {
   const [level, setLevel] = useState(0);
   const [lastError, setLastError] = useState<string>();
   const [call, setCall] = useState<OutboundCallState>();
+  const [listening, setListening] = useState(false);
+  const [phone, setPhone] = useState<PhoneInfo>();
 
   const ws = useRef<WebSocket>();
   const sessionId = useRef<string>();
@@ -60,6 +82,7 @@ export function useVoiceSession() {
   const stream = useRef<MediaStream>();
   const recorder = useRef<MediaRecorder>();
   const pressed = useRef(false);
+  const listenRec = useRef<MediaRecorder>(); // hands-free recorder (whole call)
   const audioCtx = useRef<AudioContext>();
   const analyser = useRef<AnalyserNode>();
   const raf = useRef<number>();
@@ -94,13 +117,21 @@ export function useVoiceSession() {
   }, []);
 
   // ── Playback ──
+  const playing = useRef(false);
+  const setPlaying = useCallback((on: boolean) => {
+    if (playing.current === on) return;
+    playing.current = on;
+    send({ type: "playback", playing: on }); // hands-free: the server ignores the agent's own voice meanwhile
+  }, [send]);
+
   const stopPlayback = useCallback(() => {
     try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
     const p = player.current;
     player.current = undefined;
     p?.stop();
+    setPlaying(false);
     setActivity((a) => (a === "speaking" ? "idle" : a));
-  }, []);
+  }, [setPlaying]);
 
   const markPerceived = useCallback((id: number | undefined) => {
     const t0 = releasedAt.current;
@@ -118,11 +149,11 @@ export function useVoiceSession() {
     const fr = synth.getVoices().find((v) => v.lang?.toLowerCase().startsWith("fr"));
     if (fr) u.voice = fr;
     u.rate = 1.08;
-    u.onstart = () => { setActivity("speaking"); markPerceived(id); };
-    u.onend = u.onerror = () => setActivity((a) => (a === "speaking" ? "idle" : a));
+    u.onstart = () => { setActivity("speaking"); setPlaying(true); markPerceived(id); };
+    u.onend = u.onerror = () => { setPlaying(false); setActivity((a) => (a === "speaking" ? "idle" : a)); };
     setActivity("speaking");
     synth.speak(u);
-  }, [markPerceived, stopPlayback]);
+  }, [markPerceived, setPlaying, stopPlayback]);
 
   // ── Server messages ──
   const onMessage = useCallback((ev: MessageEvent) => {
@@ -136,7 +167,7 @@ export function useVoiceSession() {
     switch (m.type) {
       case "ready":
         sessionId.current = m.sessionId;
-        setProviders({ llm: m.llm, stt: m.stt, tts: m.tts, sessionId: m.sessionId });
+        setProviders({ llm: m.llm, stt: m.stt, tts: m.tts, sessionId: m.sessionId, handsFree: !!m.handsFree });
         setConn("ready");
         break;
       case "transcript": {
@@ -149,7 +180,23 @@ export function useVoiceSession() {
         // Typed turns already show the caller text; the server echoes it as a transcript.
         if (turn == null) newTurn({ text: m.text, at: Date.now(), status: "final" });
         else patchTurn(turn, (t) => ({ ...t, caller: { ...t.caller, text: m.text, status: "final" } }));
+        if (listenRec.current) releasedAt.current = performance.now(); // hands-free: from the end of turn the server decided
         setActivity((a) => (a === "recording" ? a : "thinking"));
+        break;
+      }
+      case "caller_speaking":
+        // hands-free: a new caller sentence (the server already stopped the agent): cut its audio, open the turn
+        stopPlayback();
+        newTurn({ text: "", at: Date.now(), status: "recording" });
+        setActivity("recording");
+        break;
+      case "listen_stopped": {
+        // the server's STT stream failed: drop our recorder; the call page starts a new one (fresh stream) once
+        const rec = listenRec.current;
+        listenRec.current = undefined;
+        try { rec?.stop(); } catch { /* ignore */ }
+        setListening(false);
+        setLastError(m.reason);
         break;
       }
       case "agent_text":
@@ -174,9 +221,9 @@ export function useVoiceSession() {
         if (m.mime !== MOCK_TTS_MIME) {
           stopPlayback();
           const p: SegmentPlayer = new SegmentPlayer(m.mime, {
-            onPlaying: () => { setActivity("speaking"); markPerceived(id); },
+            onPlaying: () => { setActivity("speaking"); setPlaying(true); markPerceived(id); },
             onEnded: () => {
-              if (player.current === p) player.current = undefined;
+              if (player.current === p) { player.current = undefined; setPlaying(false); }
               setActivity((a) => (a === "speaking" ? "idle" : a));
             },
           });
@@ -212,7 +259,7 @@ export function useVoiceSession() {
         setActivity((a) => (a === "thinking" ? "idle" : a));
         break;
     }
-  }, [markPerceived, newTurn, patchTurn, speak, stopPlayback]);
+  }, [markPerceived, newTurn, patchTurn, setPlaying, speak, stopPlayback]);
 
   // ── Connection (auto-reconnect, same sessionId keeps the server-side history) ──
   const connect = useCallback(() => {
@@ -232,6 +279,37 @@ export function useVoiceSession() {
     };
   }, [onMessage]);
 
+  // ── Phone call watcher (WS /ai/voice/phone): the phone call's messages, shown like a local call ──
+  const onPhoneMessage = useCallback((ev: MessageEvent) => {
+    if (typeof ev.data !== "string") return;
+    let m: VoiceServerMessage;
+    try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.type === "call_started") { // a fresh conversation on screen, flagged as a phone call
+      stopPlayback();
+      currentTurn.current = undefined;
+      setTurns([]);
+      setCall((c) => ({ callId: m.callId, clientName: "", offers: [], status: "dialing", phone: true, outcome: c?.outcome }));
+    }
+    onMessage(ev);
+  }, [onMessage, stopPlayback]);
+
+  useEffect(() => {
+    let sock: WebSocket | undefined;
+    let retry: number | undefined;
+    let on = true;
+    const open = () => {
+      if (!on) return;
+      sock = new WebSocket(wsUrl("/voice/phone"));
+      sock.onmessage = onPhoneMessage;
+      sock.onclose = () => { if (on) retry = window.setTimeout(open, 3000); };
+    };
+    fetch(`${AI_BASE}/phone`)
+      .then((r) => (r.ok ? (r.json() as Promise<PhoneInfo>) : undefined))
+      .then((info) => { if (!on) return; setPhone(info); if (info?.enabled) open(); })
+      .catch(() => undefined);
+    return () => { on = false; window.clearTimeout(retry); sock?.close(); };
+  }, [onPhoneMessage]);
+
   useEffect(() => {
     alive.current = true;
     connect();
@@ -243,6 +321,7 @@ export function useVoiceSession() {
       stopPlayback();
       if (raf.current) cancelAnimationFrame(raf.current);
       try { recorder.current?.stop(); } catch { /* ignore */ }
+      try { listenRec.current?.stop(); } catch { /* ignore */ }
       stream.current?.getTracks().forEach((t) => t.stop());
       void audioCtx.current?.close().catch(() => undefined);
     };
@@ -285,7 +364,7 @@ export function useVoiceSession() {
   }, []);
 
   const startTalking = useCallback(async () => {
-    if (pressed.current || conn !== "ready") return;
+    if (pressed.current || conn !== "ready" || listenRec.current) return; // hands-free: no push-to-talk
     pressed.current = true;
     stopPlayback();
     const s = await ensureMic();
@@ -334,6 +413,33 @@ export function useVoiceSession() {
     setLastError(undefined);
   }, [conn, newTurn, send, stopPlayback]);
 
+  /** Hands-free: stream the mic for the whole call; the server decides when the caller has finished. */
+  const startListening = useCallback(async () => {
+    if (listenRec.current || conn !== "ready" || !providers?.handsFree) return;
+    const s = await ensureMic();
+    if (!s) return;
+    const mime = REC_MIME.find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
+    const rec = new MediaRecorder(s, mime ? { mimeType: mime } : undefined);
+    listenRec.current = rec;
+    send({ type: "listen_start", mime: rec.mimeType || mime || "audio/webm" });
+    rec.ondataavailable = (e) => { if (e.data.size && ws.current?.readyState === WebSocket.OPEN) ws.current.send(e.data); };
+    void audioCtx.current?.resume();
+    rec.start(100);
+    setListening(true);
+    meter();
+  }, [conn, ensureMic, meter, providers?.handsFree, send]);
+
+  const stopListening = useCallback(() => {
+    const rec = listenRec.current;
+    if (!rec) return;
+    listenRec.current = undefined;
+    try { rec.stop(); } catch { /* ignore */ }
+    send({ type: "listen_stop" });
+    if (raf.current) cancelAnimationFrame(raf.current);
+    setLevel(0);
+    setListening(false);
+  }, [send]);
+
   /** Start an outbound call: fresh history server-side, then call_started and the agent's opening turn. */
   const dial = useCallback((callId: string) => {
     if (conn !== "ready") return;
@@ -348,11 +454,32 @@ export function useVoiceSession() {
   }, [conn, send, stopPlayback]);
 
   const hangUp = useCallback(() => {
+    stopListening();
     stopPlayback();
     send({ type: "hangup" });
     setCall((c) => (c && c.status !== "ended" ? { ...c, status: "ending" } : c));
     setActivity("idle");
-  }, [send, stopPlayback]);
+  }, [send, stopListening, stopPlayback]);
+
+  /** Ring the user's phone (TWILIO_TO_NUMBER) for this campaign call; the agent speaks when they pick up. */
+  const dialPhone = useCallback(async (callId: string) => {
+    stopPlayback();
+    currentTurn.current = undefined;
+    setTurns([]);
+    setLastError(undefined);
+    setCall({ callId, clientName: "", offers: [], status: "dialing", phone: true });
+    const error = await postPhone("call", { campaignCallId: callId });
+    if (error) {
+      toast.error("Appel téléphonique impossible", error);
+      setCall((c) => (c?.callId === callId && c.status === "dialing" ? { ...c, status: "ended", error } : c));
+    }
+  }, [stopPlayback]);
+
+  const hangUpPhone = useCallback(async (callId: string) => {
+    setCall((c) => (c && c.callId === callId && c.status !== "ended" ? { ...c, status: "ending" } : c));
+    const error = await postPhone("hangup", { campaignCallId: callId });
+    if (error) toast.error("Raccrochage impossible", error);
+  }, []);
 
   const reset = useCallback(() => {
     stopPlayback();
@@ -364,7 +491,8 @@ export function useVoiceSession() {
   }, [send, stopPlayback]);
 
   return {
-    conn, activity, mic, providers, turns, level, lastError, call,
-    startTalking, stopTalking, sendText, stopPlayback, reset, reconnect: connect, dial, hangUp,
+    conn, activity, mic, providers, turns, level, lastError, call, listening, phone,
+    startTalking, stopTalking, sendText, stopPlayback, reset, reconnect: connect, dial, hangUp, startListening, stopListening,
+    dialPhone, hangUpPhone,
   };
 }

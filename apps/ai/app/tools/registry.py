@@ -20,7 +20,7 @@ sent to the model, and its docstring into the description:
 
 import inspect
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError, create_model
@@ -35,6 +35,7 @@ from .erp import Actor, ErpClient
 class ToolContext:
     erp: ErpClient  # HTTP client for the ERP API, already tagged with x-actor
     actor: Actor  # "ai_chat" (web chat) or "voice_agent" (phone / voice commands)
+    messages: list = field(default_factory=list)  # the conversation so far (read-only for tools: e.g. "did the client say yes?")
 
 
 class ToolArgs(BaseModel):

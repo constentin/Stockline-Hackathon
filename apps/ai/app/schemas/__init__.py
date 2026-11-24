@@ -39,6 +39,11 @@ from .voice import (
     TextMessage,
     TranscriptMessage,
     VoiceClientMessage,
+    ListenStartMessage,
+    ListenStopMessage,
+    PlaybackMessage,
+    CallerSpeakingMessage,
+    ListenStoppedMessage,
     VoiceErrorMessage,
     VoiceServerMessage,
 )

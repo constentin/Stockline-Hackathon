@@ -15,6 +15,10 @@
  *  WS   /voice/command[?speak=1]        the same command with LIVE transcription: send audio_start {mime, hint?}, binary frames
  *                                       while the key is down, audio_end (or one { type: "text" }); receive CommandStreamEvent JSON
  *                                       (transcript final=false while speaking, then the POST /command events). Closed after done | error.
+ *  GET  /phone                          → PhoneInfo: can the agent ring a real phone (Twilio), which one (masked)
+ *  POST /phone/call                     body PhoneCallRequest → PhoneCallResponse: ring TWILIO_TO_NUMBER for a campaign call
+ *  POST /phone/hangup                   body PhoneCallRequest → 204: hang up the phone call in progress
+ *  WS   /voice/phone                    receive only: the phone call's VoiceServerMessage JSON (no audio), to show it live
  */
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
@@ -61,7 +65,11 @@ export type VoiceClientMessage =
   | { type: "audio_end" } // caller released space; binary frames sent in between (every 100–250 ms) are the utterance, streamed to the STT as they arrive
   | { type: "text"; text: string } // typed instead of spoken (debug)
   | { type: "reset" }
-  | { type: "hangup" }; // ends the outbound call: outcome recorded if the agent did not, then call_ended
+  | { type: "hangup" } // ends the outbound call: outcome recorded if the agent did not, then call_ended
+  // hands-free (only when ready.handsFree): binary frames stream continuously, the server detects the ends of sentences
+  | { type: "listen_start"; mime: string }
+  | { type: "listen_stop" }
+  | { type: "playback"; playing: boolean }; // the agent's audio starts / stops playing (echo, barge-in)
 
 export interface TurnTimings {
   sttMs?: number;
@@ -69,10 +77,21 @@ export interface TurnTimings {
   llmTotalMs?: number;
   ttsFirstByteMs?: number;
   totalMs?: number; // end of caller speech → first agent audio byte
+  // outbound calls
+  endpointMs?: number; // hands-free: last word heard → end of turn decided (included in totalMs)
+  routeMs?: number; // Jev routing still to wait at the start of the turn
+  intent?: string; // what Jev understood (valide, refuse, negocie…)
+  action?: string; // what the code did before the model (confirmed, declined, do_not_call)
+  model?: string; // the model that answered
+  fillerMs?: number; // end of caller speech → pre-recorded waiting phrase sent
 }
+/** The TurnTimings fields that are durations in ms (not intent / action / model). */
+export type TurnTimingMs = { [K in keyof TurnTimings]-?: NonNullable<TurnTimings[K]> extends number ? K : never }[keyof TurnTimings];
 
 export type VoiceServerMessage =
-  | { type: "ready"; sessionId: string; stt: string; tts: string; llm: string }
+  | { type: "ready"; sessionId: string; stt: string; tts: string; llm: string; handsFree?: boolean }
+  | { type: "caller_speaking" } // hands-free: the caller started a sentence (the agent was stopped if it was talking)
+  | { type: "listen_stopped"; reason: string } // hands-free stream failed server-side: restart it (new recording) or use Space
   // While the caller speaks (streaming STT): final=false, the whole text heard so far, resent as words are recognised;
   // `stable` = its leading part made of final words (won't change). Then once final=true: what the agent answers.
   | { type: "transcript"; track: "caller"; text: string; final: boolean; stable?: string }
@@ -108,3 +127,15 @@ export type CommandStreamEvent =
   | { type: "transcript"; text: string; ms: number; final?: boolean; stable?: string }
   | { type: "navigate"; path: string; label?: string } // the user asked to SEE an entity: web route to open (e.g. /products/prd_0012)
   | { type: "speech"; mime: string; audio: string; ms: number }; // ?speak=1: base64 audio of the answer; mime MOCK_TTS_MIME → speechSynthesis
+
+// ── Phone calls through Twilio (apps/ai/app/services/phone.py, GUIDE-TELEPHONE.md) ──
+
+export interface PhoneInfo {
+  enabled: boolean;
+  to?: string; // the number called, masked ("+336 •• •• •• 78")
+  reason?: string; // why it is disabled (missing .env settings, unsupported TTS / STT)
+}
+
+export interface PhoneCallRequest { campaignCallId: string }
+
+export interface PhoneCallResponse { callSid: string; to: string }

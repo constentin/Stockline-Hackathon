@@ -6,6 +6,8 @@ are already transcribed when the key is released. At the end of the audio we ask
 last provisional words into final ones right away and marks the spot with a <fin> token — a few hundred ms,
 instead of transcribing the whole recording after the release (~4 s).
 The browser's WebM/Opus is accepted as is ("audio_format": "auto" detects webm, ogg, wav, mp3…; not mp4).
+Phone calls (services/phone.py) send raw µ-law 8 kHz ("audio/x-mulaw"): a raw format has no header to detect, so
+it is declared ("audio_format": "mulaw", sample_rate, num_channels).
 
     → start request {model, audio_format, language_hints, enable_endpoint_detection, context: {terms}}
     → binary audio frames …                       (as they arrive)
@@ -19,6 +21,7 @@ Control tokens: <fin> answers a finalize; <end> marks the end of a sentence when
 detection — the hook for hands-free mode, see GUIDE-VOIX.md 4.2). Neither is spoken text.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 
@@ -31,6 +34,13 @@ FINALIZE = json.dumps({"type": "finalize"})
 MAX_TERMS_CHARS = 6000  # context terms budget, first terms first (Soniox limits the whole context's size)
 
 
+def audio_format(mime: str) -> dict:
+    """Soniox audio settings for a mime type: raw telephone µ-law is declared, everything else is auto-detected."""
+    if "mulaw" in mime.lower() or "ulaw" in mime.lower():
+        return {"audio_format": "mulaw", "sample_rate": 8000, "num_channels": 1}
+    return {"audio_format": "auto"}
+
+
 class SonioxSTT(STTClient):
     name = "soniox"
     streams = True
@@ -38,10 +48,10 @@ class SonioxSTT(STTClient):
     def __init__(self, api_key: str, model: str = "stt-rt-v6", language: str = "fr", connect: Callable = open_ws):
         self.api_key, self.model, self.language, self.connect = api_key, model, language, connect
 
-    def start_request(self, hint: str | None) -> dict:
+    def start_request(self, hint: str | None, mime: str = "") -> dict:
         req: dict = {
             "model": self.model,
-            "audio_format": "auto",
+            **audio_format(mime),
             "language_hints": [self.language],
             "enable_endpoint_detection": True,  # final words at each pause, not only at the end
         }
@@ -62,7 +72,7 @@ class SonioxSTT(STTClient):
 
     async def transcribe_stream(self, audio: AsyncIterator[bytes], mime: str, hint: str | None = None) -> AsyncIterator[STTUpdate]:
         async with self.connect(URL, {"Authorization": f"Bearer {self.api_key}"}, "soniox stt") as ws:
-            await ws.send(json.dumps(self.start_request(hint)))
+            await ws.send(json.dumps(self.start_request(hint, mime)))
             async with sending(ws, audio, end=FINALIZE):
                 final = ""  # final tokens, accumulated (each arrives once)
                 async for raw in ws:
@@ -87,3 +97,53 @@ class SonioxSTT(STTClient):
                         return  # leaving the blocks closes the socket
                     yield STTUpdate((final + provisional).strip(), stable=final.strip())
         raise provider_error("soniox stt", "closed", "connection closed before the final words")
+
+    # ── hands-free: one stream for the whole call ──
+
+    listens = True
+
+    def finalize_message(self) -> str:
+        return FINALIZE
+
+    async def listen(
+        self, audio: AsyncIterator[bytes], mime: str, hint: str | None, control: "asyncio.Queue[str]"
+    ) -> AsyncIterator[STTUpdate]:
+        """Continuous transcription: the current sentence as it is heard, final=True at each <end> (a pause Soniox
+        detected) or <fin> (answer to a finalize the listener sent after a silence). The stream stays open."""
+        async with self.connect(URL, {"Authorization": f"Bearer {self.api_key}"}, "soniox stt") as ws:
+            await ws.send(json.dumps(self.start_request(hint, mime)))
+
+            async def relay() -> None:  # control messages (finalize) between the audio frames
+                while True:
+                    await ws.send(await control.get())
+
+            relaying = asyncio.create_task(relay())
+            try:
+                async with sending(ws, audio, end=FINALIZE):
+                    sentence = ""  # final words of the current sentence
+                    async for raw in ws:
+                        msg = json.loads(raw)
+                        if msg.get("error_code"):
+                            raise provider_error(
+                                "soniox stt", msg["error_code"], f"{msg.get('error_type', '')}: {msg.get('error_message', '')}"
+                            )
+                        provisional = ""
+                        for tok in msg.get("tokens") or []:
+                            text = tok.get("text") or ""
+                            if text in ("<end>", "<fin>"):  # end of a sentence: everything before it is final
+                                if sentence.strip():
+                                    yield STTUpdate(sentence.strip(), final=True, stable=sentence.strip())
+                                sentence = ""
+                            elif text.startswith("<"):
+                                continue
+                            elif tok.get("is_final"):
+                                sentence += text
+                            else:
+                                provisional += text
+                        if msg.get("finished"):
+                            if sentence.strip():
+                                yield STTUpdate(sentence.strip(), final=True, stable=sentence.strip())
+                            return
+                        yield STTUpdate((sentence + provisional).strip(), stable=sentence.strip())
+            finally:
+                relaying.cancel()

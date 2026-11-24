@@ -20,6 +20,7 @@ to build the best voice agent on top of it (smart, fast, natural).
 | [GUIDE-AGENTS.md](GUIDE-AGENTS.md) | the teaching guide (French): agent concepts (loop, harness, tools, context, prompt caching, models, Jev, evaluation, pitfalls) mapped to the kit's code |
 | [apps/ai/README.md](apps/ai/README.md) | the agent loop, tools, providers, the voice WebSocket protocol |
 | [GUIDE-VOIX.md](GUIDE-VOIX.md) | voice-agent guide (French): latency metrics, the kit's measured numbers, speed and naturalness techniques mapped to the files to change |
+| [GUIDE-TELEPHONE.md](GUIDE-TELEPHONE.md) | real phone calls through Twilio (French): setup step by step, how the bridge works (`services/phone.py`), demo checklist |
 | [DESIGN.md](DESIGN.md) | the web design system (only when touching `apps/web`) |
 
 ## Layout
