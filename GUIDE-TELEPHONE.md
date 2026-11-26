@@ -57,6 +57,8 @@ téléphone) et enregistrez.
 
 Dans le terminal WSL (Ubuntu) :
 
+Sur Mac, remplacez le point 1 par `brew install ngrok` (Homebrew).
+
 ```bash
 # 1. Installer ngrok (une fois)
 curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
